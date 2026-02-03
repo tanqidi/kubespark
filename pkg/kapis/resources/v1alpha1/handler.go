@@ -146,6 +146,15 @@ func (h *Handler) GetResourceByGVR(req *restful.Request, resp *restful.Response)
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
 
+	// In Kubernetes, core resources (like pods, services, etc.) live in the
+	// "core" API group, which is represented by an empty string "" in the
+	// GroupVersionResource. However, our HTTP route requires a non-empty
+	// "{group}" path segment, so the API is designed to accept the literal
+	// string "core" and then translate it to "" when constructing the GVR.
+	if group == "core" {
+		group = ""
+	}
+
 	gvr := schema.GroupVersionResource{
 		Group:    group,
 		Version:  version,
@@ -168,6 +177,12 @@ func (h *Handler) CreateResourceByGVR(req *restful.Request, resp *restful.Respon
 	version := req.PathParameter("version")
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
+
+	// Translate "core" group from the HTTP path into the empty string that
+	// Kubernetes expects for core resources.
+	if group == "core" {
+		group = ""
+	}
 
 	gvr := schema.GroupVersionResource{
 		Group:    group,
@@ -197,6 +212,12 @@ func (h *Handler) UpdateResourceByGVR(req *restful.Request, resp *restful.Respon
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
 	name := req.PathParameter("name")
+
+	// Translate "core" group from the HTTP path into the empty string that
+	// Kubernetes expects for core resources.
+	if group == "core" {
+		group = ""
+	}
 
 	gvr := schema.GroupVersionResource{
 		Group:    group,
@@ -231,6 +252,12 @@ func (h *Handler) DeleteResourceByGVR(req *restful.Request, resp *restful.Respon
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
 	name := req.PathParameter("name")
+
+	// Translate "core" group from the HTTP path into the empty string that
+	// Kubernetes expects for core resources.
+	if group == "core" {
+		group = ""
+	}
 
 	gvr := schema.GroupVersionResource{
 		Group:    group,
