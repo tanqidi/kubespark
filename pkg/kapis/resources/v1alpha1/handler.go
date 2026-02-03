@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"kubespark/pkg/kapis"
 	"kubespark/pkg/models/resources"
 
 	restful "github.com/emicklei/go-restful/v3"
@@ -48,7 +49,7 @@ func (h *Handler) ListNamespaces(req *restful.Request, resp *restful.Response) {
 		h.handleError(resp, err)
 		return
 	}
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // ListNodes lists all nodes
@@ -59,7 +60,7 @@ func (h *Handler) ListNodes(req *restful.Request, resp *restful.Response) {
 		h.handleError(resp, err)
 		return
 	}
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // ListConfigMaps lists all configmaps
@@ -85,7 +86,7 @@ func (h *Handler) ListPersistentVolumes(req *restful.Request, resp *restful.Resp
 		h.handleError(resp, err)
 		return
 	}
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // ListPersistentVolumeClaims lists all persistent volume claims
@@ -101,7 +102,7 @@ func (h *Handler) ListStorageClasses(req *restful.Request, resp *restful.Respons
 		h.handleError(resp, err)
 		return
 	}
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // ListIngresses lists all ingresses
@@ -136,7 +137,7 @@ func (h *Handler) GetClusterInfo(req *restful.Request, resp *restful.Response) {
 		h.handleError(resp, err)
 		return
 	}
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // GetResourceByGVR lists resources by Group Version Resource
@@ -168,7 +169,7 @@ func (h *Handler) GetResourceByGVR(req *restful.Request, resp *restful.Response)
 		return
 	}
 
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // CreateResourceByGVR creates a resource by Group Version Resource
@@ -202,7 +203,7 @@ func (h *Handler) CreateResourceByGVR(req *restful.Request, resp *restful.Respon
 		return
 	}
 
-	resp.WriteHeaderAndJson(http.StatusCreated, created, restful.MIME_JSON)
+	kapis.WriteCreated(resp, created)
 }
 
 // UpdateResourceByGVR updates a resource by Group Version Resource
@@ -242,7 +243,7 @@ func (h *Handler) UpdateResourceByGVR(req *restful.Request, resp *restful.Respon
 		return
 	}
 
-	resp.WriteAsJson(updated)
+	kapis.WriteSuccess(resp, updated)
 }
 
 // DeleteResourceByGVR deletes a resource by Group Version Resource
@@ -270,7 +271,14 @@ func (h *Handler) DeleteResourceByGVR(req *restful.Request, resp *restful.Respon
 		return
 	}
 
-	resp.WriteHeader(http.StatusNoContent)
+	// For delete we still return a JSON body wrapped in the standard APIResponse,
+	// so that clients always receive a consistent structure.
+	kapis.WriteSuccess(resp, map[string]string{
+		"namespace": namespace,
+		"resource":  resource,
+		"name":      name,
+		"status":    "deleted",
+	})
 }
 
 // GetNamespaceResources lists resources in a specific namespace
@@ -285,7 +293,7 @@ func (h *Handler) GetNamespaceResources(req *restful.Request, resp *restful.Resp
 		return
 	}
 
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // GetResourceDetail gets a specific resource in a namespace
@@ -300,7 +308,7 @@ func (h *Handler) GetResourceDetail(req *restful.Request, resp *restful.Response
 		return
 	}
 
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // GetPodLogs gets logs from a pod
@@ -335,7 +343,7 @@ func (h *Handler) handleListResource(req *restful.Request, resp *restful.Respons
 		h.handleError(resp, err)
 		return
 	}
-	resp.WriteAsJson(result)
+	kapis.WriteSuccess(resp, result)
 }
 
 // parseListOptions parses query parameters into ListOptions
@@ -349,8 +357,9 @@ func (h *Handler) parseListOptions(req *restful.Request) metav1.ListOptions {
 // handleError handles errors and converts them to HTTP responses
 func (h *Handler) handleError(resp *restful.Response, err error) {
 	if statusErr, ok := err.(*errors.StatusError); ok {
-		resp.WriteHeaderAndJson(int(statusErr.ErrStatus.Code), statusErr.ErrStatus, restful.MIME_JSON)
+		// Preserve the Kubernetes Status as the Data field, and use its Code/message
+		kapis.WriteErrorWithCode(resp, int(statusErr.ErrStatus.Code), int(statusErr.ErrStatus.Code), statusErr.Error())
 		return
 	}
-	resp.WriteError(http.StatusInternalServerError, err)
+	kapis.WriteErrorWithCode(resp, http.StatusInternalServerError, http.StatusInternalServerError, err.Error())
 }
