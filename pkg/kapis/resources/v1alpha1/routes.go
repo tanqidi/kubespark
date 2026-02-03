@@ -46,6 +46,32 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
 		Doc("List resources by GVR (Group Version Resource)"))
 
+	// Create dynamic resource by GVR
+	ws.Route(ws.POST("/resources/{group}/{version}/{resource}").To(h.CreateResourceByGVR).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Doc("Create resource by GVR (Group Version Resource)"))
+
+	// Update dynamic resource by GVR
+	ws.Route(ws.PUT("/resources/{group}/{version}/{resource}/{name}").To(h.UpdateResourceByGVR).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.PathParameter("name", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Doc("Update resource by GVR (Group Version Resource)"))
+
+	// Delete dynamic resource by GVR
+	ws.Route(ws.DELETE("/resources/{group}/{version}/{resource}/{name}").To(h.DeleteResourceByGVR).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.PathParameter("name", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Doc("Delete resource by GVR (Group Version Resource)"))
+
 	// Namespace-level resources
 	ws.Route(ws.GET("/namespaces/{namespace}/{resource}").To(h.GetNamespaceResources).
 		Param(ws.PathParameter("namespace", "Namespace name").DataType("string")).
@@ -72,4 +98,3 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 
 	container.Add(ws)
 }
-

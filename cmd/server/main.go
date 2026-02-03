@@ -71,7 +71,7 @@ func main() {
 			</head>
 			<body>
 				<div class="container">
-					<h1>🚀 Kubespark API Server</h1>
+					<h1>Kubespark API Server</h1>
 					<p>A simple Kubernetes API proxy built with Go</p>
 					
 					<div class="api-list">

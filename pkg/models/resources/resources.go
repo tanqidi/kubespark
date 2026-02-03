@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -90,6 +91,30 @@ func (r *ResourcesOperator) ListResourcesByGVR(ctx context.Context, gvr schema.G
 	return r.k8sClient.Dynamic().Resource(gvr).Namespace(namespace).List(ctx, options)
 }
 
+// CreateResourceByGVR creates a resource using the dynamic client and GVR
+func (r *ResourcesOperator) CreateResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured, options metav1.CreateOptions) (runtime.Object, error) {
+	if namespace == "" {
+		return r.k8sClient.Dynamic().Resource(gvr).Create(ctx, obj, options)
+	}
+	return r.k8sClient.Dynamic().Resource(gvr).Namespace(namespace).Create(ctx, obj, options)
+}
+
+// UpdateResourceByGVR updates a resource using the dynamic client and GVR
+func (r *ResourcesOperator) UpdateResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured, options metav1.UpdateOptions) (runtime.Object, error) {
+	if namespace == "" {
+		return r.k8sClient.Dynamic().Resource(gvr).Update(ctx, obj, options)
+	}
+	return r.k8sClient.Dynamic().Resource(gvr).Namespace(namespace).Update(ctx, obj, options)
+}
+
+// DeleteResourceByGVR deletes a resource using the dynamic client and GVR
+func (r *ResourcesOperator) DeleteResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, options metav1.DeleteOptions) error {
+	if namespace == "" {
+		return r.k8sClient.Dynamic().Resource(gvr).Delete(ctx, name, options)
+	}
+	return r.k8sClient.Dynamic().Resource(gvr).Namespace(namespace).Delete(ctx, name, options)
+}
+
 // GetClusterInfo returns cluster information
 func (r *ResourcesOperator) GetClusterInfo(ctx context.Context) (map[string]interface{}, error) {
 	version, err := r.k8sClient.Kubernetes().Discovery().ServerVersion()
@@ -125,4 +150,3 @@ func (r *ResourcesOperator) GetPodLogs(ctx context.Context, namespace string, na
 	}
 	return r.k8sClient.Kubernetes().CoreV1().Pods(namespace).GetLogs(name, opts).DoRaw(ctx)
 }
-

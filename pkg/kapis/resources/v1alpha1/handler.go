@@ -9,6 +9,7 @@ import (
 	restful "github.com/emicklei/go-restful/v3"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -161,6 +162,90 @@ func (h *Handler) GetResourceByGVR(req *restful.Request, resp *restful.Response)
 	resp.WriteAsJson(result)
 }
 
+// CreateResourceByGVR creates a resource by Group Version Resource
+func (h *Handler) CreateResourceByGVR(req *restful.Request, resp *restful.Response) {
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
+	resource := req.PathParameter("resource")
+	namespace := req.QueryParameter("namespace")
+
+	gvr := schema.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resource,
+	}
+
+	obj := &unstructured.Unstructured{}
+	if err := req.ReadEntity(obj); err != nil {
+		resp.WriteError(http.StatusBadRequest, err)
+		return
+	}
+
+	created, err := h.resourcesOperator.CreateResourceByGVR(req.Request.Context(), gvr, namespace, obj, metav1.CreateOptions{})
+	if err != nil {
+		h.handleError(resp, err)
+		return
+	}
+
+	resp.WriteHeaderAndJson(http.StatusCreated, created, restful.MIME_JSON)
+}
+
+// UpdateResourceByGVR updates a resource by Group Version Resource
+func (h *Handler) UpdateResourceByGVR(req *restful.Request, resp *restful.Response) {
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
+	resource := req.PathParameter("resource")
+	namespace := req.QueryParameter("namespace")
+	name := req.PathParameter("name")
+
+	gvr := schema.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resource,
+	}
+
+	obj := &unstructured.Unstructured{}
+	if err := req.ReadEntity(obj); err != nil {
+		resp.WriteError(http.StatusBadRequest, err)
+		return
+	}
+
+	// Ensure name in metadata matches path parameter to avoid accidental rename
+	if obj.GetName() == "" {
+		obj.SetName(name)
+	}
+
+	updated, err := h.resourcesOperator.UpdateResourceByGVR(req.Request.Context(), gvr, namespace, obj, metav1.UpdateOptions{})
+	if err != nil {
+		h.handleError(resp, err)
+		return
+	}
+
+	resp.WriteAsJson(updated)
+}
+
+// DeleteResourceByGVR deletes a resource by Group Version Resource
+func (h *Handler) DeleteResourceByGVR(req *restful.Request, resp *restful.Response) {
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
+	resource := req.PathParameter("resource")
+	namespace := req.QueryParameter("namespace")
+	name := req.PathParameter("name")
+
+	gvr := schema.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resource,
+	}
+
+	if err := h.resourcesOperator.DeleteResourceByGVR(req.Request.Context(), gvr, namespace, name, metav1.DeleteOptions{}); err != nil {
+		h.handleError(resp, err)
+		return
+	}
+
+	resp.WriteHeader(http.StatusNoContent)
+}
+
 // GetNamespaceResources lists resources in a specific namespace
 func (h *Handler) GetNamespaceResources(req *restful.Request, resp *restful.Response) {
 	namespace := req.PathParameter("namespace")
@@ -242,4 +327,3 @@ func (h *Handler) handleError(resp *restful.Response, err error) {
 	}
 	resp.WriteError(http.StatusInternalServerError, err)
 }
-

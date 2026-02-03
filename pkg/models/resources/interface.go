@@ -6,6 +6,7 @@ import (
 	"kubespark/pkg/simple/client/k8s"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -17,6 +18,11 @@ type Interface interface {
 	ListResourcesByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, options metav1.ListOptions) (runtime.Object, error)
 	GetClusterInfo(ctx context.Context) (map[string]interface{}, error)
 	GetPodLogs(ctx context.Context, namespace string, name string, container string, tailLines *int64) ([]byte, error)
+
+	// Generic CRUD based on GroupVersionResource, using dynamic client.
+	CreateResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured, options metav1.CreateOptions) (runtime.Object, error)
+	UpdateResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured, options metav1.UpdateOptions) (runtime.Object, error)
+	DeleteResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, options metav1.DeleteOptions) error
 }
 
 // ResourcesOperator provides methods to manipulate resources
@@ -30,4 +36,3 @@ func NewResourcesOperator(k8sClient k8s.Interface) Interface {
 		k8sClient: k8sClient,
 	}
 }
-
