@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
+	"github.com/go-openapi/spec"
 
 	"kubespark/pkg/apiserver"
 	"kubespark/pkg/kapis/auth"
@@ -61,6 +62,49 @@ func main() {
 	openAPIConfig := restfulspec.Config{
 		WebServices: server.Container().RegisteredWebServices(),
 		APIPath:     "/apidocs.json",
+		PostBuildSwaggerObjectHandler: func(swo *spec.Swagger) {
+			// Add security definitions for JWT Bearer Token
+			if swo.SecurityDefinitions == nil {
+				swo.SecurityDefinitions = make(map[string]*spec.SecurityScheme)
+			}
+			swo.SecurityDefinitions["Bearer"] = &spec.SecurityScheme{
+				SecuritySchemeProps: spec.SecuritySchemeProps{
+					Type:        "apiKey",
+					Name:        "Authorization",
+					In:          "header",
+					Description: "JWT Bearer Token authentication. Enter 'Bearer {token}' (include 'Bearer' prefix). Get token from POST /kapis/auth.kubespark.io/v1/login",
+				},
+			}
+
+			// Add security requirements to all paths except login and health check
+			if swo.Paths != nil && swo.Paths.Paths != nil {
+				for path, pathItem := range swo.Paths.Paths {
+					// Skip login endpoint and health check
+					if path == "/kapis/auth.kubespark.io/v1/login" || path == "/healthz" {
+						continue
+					}
+
+					// Add security requirement to all operations in this path
+					securityReq := map[string][]string{"Bearer": {}}
+
+					if pathItem.Get != nil {
+						pathItem.Get.Security = []map[string][]string{securityReq}
+					}
+					if pathItem.Post != nil {
+						pathItem.Post.Security = []map[string][]string{securityReq}
+					}
+					if pathItem.Put != nil {
+						pathItem.Put.Security = []map[string][]string{securityReq}
+					}
+					if pathItem.Delete != nil {
+						pathItem.Delete.Security = []map[string][]string{securityReq}
+					}
+					if pathItem.Patch != nil {
+						pathItem.Patch.Security = []map[string][]string{securityReq}
+					}
+				}
+			}
+		},
 	}
 	server.Container().Add(restfulspec.NewOpenAPIService(openAPIConfig))
 
@@ -92,7 +136,17 @@ func main() {
 								SwaggerUIBundle.presets.apis,
 								SwaggerUIBundle.SwaggerUIStandalonePreset
 							],
-							layout: "BaseLayout"
+							layout: "BaseLayout",
+							onComplete: function() {
+								// Add authentication notice
+								var authNotice = document.createElement('div');
+								authNotice.style.cssText = 'background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin: 20px; color: #856404;';
+								authNotice.innerHTML = '<strong>🔐 认证说明：</strong>大部分 API 接口需要 JWT Token 认证。请先调用 <code>POST /kapis/auth.kubespark.io/v1/login</code> 接口获取 Token，然后在右上角点击 "Authorize" 按钮，输入 <code>Bearer {your-token}</code>（包含 "Bearer" 前缀）。';
+								var swaggerContainer = document.querySelector('#swagger-ui');
+								if (swaggerContainer) {
+									swaggerContainer.insertBefore(authNotice, swaggerContainer.firstChild);
+								}
+							}
 						});
 					};
 				</script>
@@ -152,6 +206,7 @@ func main() {
 					</div>
 					
 					<div class="note">
+						<p><strong>🔐 认证说明：</strong>大部分 API 接口需要 JWT Token 认证。请先调用 <code>/kapis/auth.kubespark.io/v1/login</code> 接口获取 Token，然后在请求头中添加 <code>Authorization: Bearer {token}</code>。</p>
 						<p><strong>Note:</strong> All endpoints support query parameters like:</p>
 						<ul>
 							<li><code>?namespace=default</code> - Filter by namespace</li>

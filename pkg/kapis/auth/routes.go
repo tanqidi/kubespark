@@ -12,7 +12,9 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 		Produces(restful.MIME_JSON)
 
 	// Login endpoint
-	ws.Route(ws.POST("/login").To(h.Login).Doc("User login"))
+	ws.Route(ws.POST("/login").To(h.Login).
+		Doc("User login - Get JWT Token for API authentication").
+		Notes("Use the returned token in Authorization header as 'Bearer {token}' for subsequent API calls"))
 
 	container.Add(ws)
 }
