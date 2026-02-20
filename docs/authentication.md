@@ -348,7 +348,6 @@ Token 验证采用**三层验证机制**，确保最高级别的安全性：
 
 **免认证的端点**：
 - `/kapis/auth.kubespark.io/v1/login` - 登录端点
-- `/healthz` - 健康检查
 - `/swagger` - API 文档
 - `/` - 根路径
 - `/apidocs.json` - API 文档 JSON

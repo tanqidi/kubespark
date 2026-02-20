@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -36,7 +35,7 @@ func main() {
 	handler := v1alpha1.NewHandler(resourcesOperator)
 
 	// 4. Create auth handler
-	authHandler := auth.NewHandler()
+	authHandler := auth.NewHandler(k8sClient)
 
 	// 5. Create server
 	server := apiserver.NewServer(*port)
@@ -46,16 +45,6 @@ func main() {
 
 	// 7. Register resource routes
 	handler.AddToContainer(server.Container())
-
-	// 8. Health check endpoint
-	server.Container().Handle("/healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := k8sClient.Kubernetes().Discovery().RESTClient().Get().AbsPath("/healthz").Do(context.Background()).Error(); err != nil {
-			http.Error(w, "K8s API not healthy", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	}))
 
 	// 9. Register OpenAPI (Swagger) documentation endpoint.
 	// This will scan all registered WebServices and expose the spec at /apidocs.json
@@ -76,11 +65,11 @@ func main() {
 				},
 			}
 
-			// Add security requirements to all paths except login and health check
+			// Add security requirements to all paths except login
 			if swo.Paths != nil && swo.Paths.Paths != nil {
 				for path, pathItem := range swo.Paths.Paths {
-					// Skip login endpoint and health check
-					if path == "/kapis/auth.kubespark.io/v1/login" || path == "/healthz" {
+					// Skip login endpoint (health check also requires auth)
+					if path == "/kapis/auth.kubespark.io/v1/login" {
 						continue
 					}
 
@@ -196,7 +185,7 @@ func main() {
 						</div>
 						<div class="api-item">
 							<span class="method">GET</span>
-							<code class="endpoint">/healthz</code>
+							<code class="endpoint">/kapis/auth.kubespark.io/v1/healthz</code>
 							- Server and Kubernetes API health check.
 						</div>
 						<p style="margin-top:16px;">
@@ -213,7 +202,7 @@ func main() {
 							<li><code>?labelSelector=app=nginx</code> - Filter by labels</li>
 							<li><code>?fieldSelector=status.phase=Running</code> - Filter by fields</li>
 						</ul>
-						<p><a href="/healthz">Health Check</a></p>
+						<p><a href="/kapis/auth.kubespark.io/v1/healthz">Health Check</a></p>
 						<p><a href="/swagger">Swagger UI</a></p>
 					</div>
 				</div>

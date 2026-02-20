@@ -20,7 +20,7 @@ func AuthFilter(req *restful.Request, resp *restful.Response, chain *restful.Fil
 
 	// Allow health check and swagger endpoints
 	path := req.Request.URL.Path
-	if path == "/healthz" || path == "/swagger" || path == "/" || path == "/apidocs.json" {
+	if path == "/swagger" || path == "/" || path == "/apidocs.json" {
 		chain.ProcessFilter(req, resp)
 		return
 	}

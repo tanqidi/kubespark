@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"os"
 
 	"kubespark/pkg/kapis"
+	"kubespark/pkg/simple/client/k8s"
 
 	restful "github.com/emicklei/go-restful/v3"
 )
@@ -20,12 +22,21 @@ type LoginResponse struct {
 	Token string `json:"token"`
 }
 
+// HealthzResponse represents the health check response
+type HealthzResponse struct {
+	Status string `json:"status"`
+}
+
 // Handler handles authentication requests
-type Handler struct{}
+type Handler struct {
+	k8sClient k8s.Interface
+}
 
 // NewHandler creates a new auth handler
-func NewHandler() *Handler {
-	return &Handler{}
+func NewHandler(k8sClient k8s.Interface) *Handler {
+	return &Handler{
+		k8sClient: k8sClient,
+	}
 }
 
 // getCredentials returns the configured username and password from environment variables,
@@ -72,5 +83,22 @@ func (h *Handler) Login(req *restful.Request, resp *restful.Response) {
 
 	kapis.WriteSuccess(resp, LoginResponse{
 		Token: token,
+	})
+}
+
+// Healthz handles health check requests
+func (h *Handler) Healthz(req *restful.Request, resp *restful.Response) {
+	if h.k8sClient == nil {
+		kapis.WriteErrorWithCode(resp, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "K8s client not available")
+		return
+	}
+
+	if err := h.k8sClient.Kubernetes().Discovery().RESTClient().Get().AbsPath("/healthz").Do(context.Background()).Error(); err != nil {
+		kapis.WriteErrorWithCode(resp, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "K8s API not healthy")
+		return
+	}
+
+	kapis.WriteSuccess(resp, HealthzResponse{
+		Status: "OK",
 	})
 }
