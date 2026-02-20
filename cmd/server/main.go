@@ -9,6 +9,7 @@ import (
 	restfulspec "github.com/emicklei/go-restful-openapi/v2"
 
 	"kubespark/pkg/apiserver"
+	"kubespark/pkg/kapis/auth"
 	"kubespark/pkg/kapis/resources/v1alpha1"
 	"kubespark/pkg/models/resources"
 	"kubespark/pkg/simple/client/k8s"
@@ -33,13 +34,19 @@ func main() {
 	// 3. Create API handler
 	handler := v1alpha1.NewHandler(resourcesOperator)
 
-	// 4. Create server
+	// 4. Create auth handler
+	authHandler := auth.NewHandler()
+
+	// 5. Create server
 	server := apiserver.NewServer(*port)
 
-	// 5. Register routes
+	// 6. Register auth routes (must be registered before resource routes)
+	authHandler.AddToContainer(server.Container())
+
+	// 7. Register resource routes
 	handler.AddToContainer(server.Container())
 
-	// 6. Health check endpoint
+	// 8. Health check endpoint
 	server.Container().Handle("/healthz", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := k8sClient.Kubernetes().Discovery().RESTClient().Get().AbsPath("/healthz").Do(context.Background()).Error(); err != nil {
 			http.Error(w, "K8s API not healthy", http.StatusServiceUnavailable)
@@ -49,7 +56,7 @@ func main() {
 		w.Write([]byte("OK"))
 	}))
 
-	// 7. Register OpenAPI (Swagger) documentation endpoint.
+	// 9. Register OpenAPI (Swagger) documentation endpoint.
 	// This will scan all registered WebServices and expose the spec at /apidocs.json
 	openAPIConfig := restfulspec.Config{
 		WebServices: server.Container().RegisteredWebServices(),
@@ -57,7 +64,7 @@ func main() {
 	}
 	server.Container().Add(restfulspec.NewOpenAPIService(openAPIConfig))
 
-	// 8. Swagger UI page (like Java-style Swagger page)
+	// 10. Swagger UI page (like Java-style Swagger page)
 	server.Container().Handle("/swagger", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(`
@@ -94,7 +101,7 @@ func main() {
 		`))
 	}))
 
-	// 9. Welcome page
+	// 11. Welcome page
 	server.Container().Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(`
@@ -160,6 +167,6 @@ func main() {
 		`))
 	}))
 
-	// 10. Start server with graceful shutdown
+	// 12. Start server with graceful shutdown
 	server.StartWithGracefulShutdown()
 }

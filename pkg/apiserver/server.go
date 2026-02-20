@@ -22,6 +22,7 @@ type Server struct {
 func NewServer(port string) *Server {
 	container := restful.NewContainer()
 	container.Filter(CORSFilter)
+	container.Filter(AuthFilter)
 	container.Filter(LoggingFilter)
 
 	return &Server{
@@ -77,4 +78,3 @@ func (s *Server) StartWithGracefulShutdown() {
 
 	log.Println("Server stopped")
 }
-
