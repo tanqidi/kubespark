@@ -146,22 +146,26 @@ func main() {
 
 	// 11. Welcome page
 	server.Container().Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(`
 			<!DOCTYPE html>
 			<html>
 			<head>
-				<title>Kubespark - Kubernetes API Explorer</title>
+				<meta charset="UTF-8">
+				<title>Kubespark API</title>
 				<style>
 					body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
 					.container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 					h1 { color: #333; margin-top: 0; }
-					.api-list { background: #f9f9f9; padding: 20px; border-radius: 5px; margin-top: 20px; }
+					h2 { margin: 24px 0 12px; color: #222; }
+					p { line-height: 1.6; }
+					.api-list { background: #f9f9f9; padding: 20px; border-radius: 5px; margin-top: 16px; }
 					.api-item { margin: 10px 0; padding: 8px; background: white; border-left: 3px solid #4CAF50; }
-					code { background: #eee; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; }
+					code { background: #eee; padding: 2px 6px; border-radius: 3px; font-family: 'Courier New', monospace; word-break: break-all; }
 					.method { color: #4CAF50; font-weight: bold; }
 					.endpoint { color: #2196F3; }
 					.note { margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 5px; }
+					.warn { margin-top: 20px; padding: 15px; background: #fff8e1; border-radius: 5px; border: 1px solid #ffe082; }
 					a { color: #2196F3; text-decoration: none; }
 					a:hover { text-decoration: underline; }
 				</style>
@@ -169,39 +173,68 @@ func main() {
 			<body>
 				<div class="container">
 					<h1>Kubespark API Server</h1>
-					<p>A simple Kubernetes API proxy built with Go</p>
-					
+					<p>统一资源接口（GVR）入口：<code>/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}</code></p>
+
 					<div class="api-list">
-						<h3>Available APIs:</h3>
+						<h2>文档与鉴权</h2>
 						<div class="api-item">
 							<span class="method">GET</span>
 							<code class="endpoint">/apidocs.json</code>
-							- OpenAPI (Swagger) specification for all registered endpoints.
+							- OpenAPI 规范
 						</div>
 						<div class="api-item">
 							<span class="method">GET</span>
-							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/*</code>
-							- Kubernetes resource proxy (pods, deployments, services, etc.).
+							<code class="endpoint">/swagger</code>
+							- Swagger UI
 						</div>
 						<div class="api-item">
 							<span class="method">GET</span>
 							<code class="endpoint">/kapis/auth.kubespark.io/v1/healthz</code>
-							- Server and Kubernetes API health check.
+							- 服务健康检查
 						</div>
-						<p style="margin-top:16px;">
-							You can open the OpenAPI spec in any Swagger UI instance by pointing it to
-							<code class="endpoint">/apidocs.json</code>.
-						</p>
 					</div>
-					
+
+					<div class="api-list">
+						<h2>通用接口用法</h2>
+						<div class="api-item">
+							<span class="method">GET</span>
+							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}?namespace=bb</code>
+							- 列表查询（<code>namespace</code> 仅对命名空间级资源生效）
+						</div>
+						<div class="api-item">
+							<span class="method">GET</span>
+							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
+							- 单条详情
+						</div>
+						<div class="api-item">
+							<span class="method">POST</span>
+							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}?namespace=bb</code>
+							- 创建资源（Body 为 Kubernetes 资源 JSON）
+						</div>
+						<div class="api-item">
+							<span class="method">PUT</span>
+							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
+							- 更新资源
+						</div>
+						<div class="api-item">
+							<span class="method">DELETE</span>
+							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
+							- 删除资源
+						</div>
+					</div>
+
 					<div class="note">
-						<p><strong>🔐 认证说明：</strong>大部分 API 接口需要 JWT Token 认证。请先调用 <code>/kapis/auth.kubespark.io/v1/login</code> 接口获取 Token，然后在请求头中添加 <code>Authorization: Bearer {token}</code>。</p>
-						<p><strong>Note:</strong> All endpoints support query parameters like:</p>
+						<p><strong>认证说明：</strong>大部分 API 接口需要 JWT Token。先调用 <code>/kapis/auth.kubespark.io/v1/login</code> 获取 Token，请求头带上 <code>Authorization: Bearer {token}</code>。</p>
+						<p><strong>常用筛选参数：</strong></p>
 						<ul>
-							<li><code>?namespace=default</code> - Filter by namespace</li>
-							<li><code>?labelSelector=app=nginx</code> - Filter by labels</li>
-							<li><code>?fieldSelector=status.phase=Running</code> - Filter by fields</li>
+							<li><code>?namespace=bb</code> - 命名空间过滤</li>
+							<li><code>?labelSelector=app=nginx</code> - 标签过滤</li>
+							<li><code>?fieldSelector=metadata.name=nginx-service</code> - 字段过滤</li>
 						</ul>
+					</div>
+
+					<div class="warn">
+						<p><strong>GVR 说明：</strong>核心组资源使用 <code>group=core</code>（例如 Service: <code>/resources/core/v1/services</code>）；非核心组示例：Deployment 使用 <code>/resources/apps/v1/deployments</code>。</p>
 						<p><a href="/kapis/auth.kubespark.io/v1/healthz">Health Check</a></p>
 						<p><a href="/swagger">Swagger UI</a></p>
 					</div>

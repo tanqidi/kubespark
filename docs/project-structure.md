@@ -224,24 +224,16 @@ main() {
 
 **主要处理方法**:
 
-1. **资源列表方法**:
-   - `ListPods()`, `ListDeployments()`, `ListServices()` 等
-   - 每个方法对应一种资源类型
-   - 支持查询参数过滤（namespace、labelSelector、fieldSelector）
-
-2. **集群信息**:
+1. **集群信息**:
    - `GetClusterInfo()`: 返回集群版本、节点数等信息
 
-3. **动态资源查询**:
+2. **动态资源 CRUD**:
    - `GetResourceByGVR()`: 通过 GVR 查询任意资源类型
-   - `GetNamespaceResources()`: 查询指定命名空间中的资源
-   - `GetResourceDetail()`: 获取指定资源的详细信息
-
-4. **Pod 日志**:
-   - `GetPodLogs()`: 获取 Pod 日志，支持容器过滤和行数限制
+   - `CreateResourceByGVR()`: 通过 GVR 创建资源
+   - `UpdateResourceByGVR()`: 通过 GVR 更新资源
+   - `DeleteResourceByGVR()`: 通过 GVR 删除资源
 
 **辅助方法**:
-- `handleListResource()`: 统一处理列表请求的辅助方法
 - `parseListOptions()`: 解析查询参数为 `ListOptions`
 - `handleError()`: 统一错误处理，将 Kubernetes 错误转换为 HTTP 响应
 
@@ -258,39 +250,19 @@ main() {
 
 **路由分类**:
 
-1. **核心资源路由**:
-   - `/pods` - 列出所有 Pods
-   - `/services` - 列出所有 Services
-   - `/namespaces` - 列出所有命名空间
-   - `/nodes` - 列出所有节点
-   - `/configmaps` - 列出所有 ConfigMaps
-   - `/secrets` - 列出所有 Secrets
-   - `/events` - 列出所有事件
-
-2. **存储资源路由**:
-   - `/persistentvolumes` - 列出所有 PV
-   - `/persistentvolumeclaims` - 列出所有 PVC
-   - `/storageclasses` - 列出所有存储类
-
-3. **网络资源路由**:
-   - `/ingresses` - 列出所有 Ingresses
-
-4. **工作负载资源路由**:
-   - `/daemonsets` - 列出所有 DaemonSets
-   - `/statefulsets` - 列出所有 StatefulSets
-   - `/jobs` - 列出所有 Jobs
-   - `/cronjobs` - 列出所有 CronJobs
-
-5. **集群信息路由**:
+1. **集群信息路由**:
    - `/cluster-info` - 获取集群信息
 
-6. **动态资源路由**:
+2. **动态资源路由（统一入口）**:
    - `/resources/{group}/{version}/{resource}` - 通过 GVR 查询资源
-   - `/namespaces/{namespace}/{resource}` - 查询命名空间中的资源
-   - `/namespaces/{namespace}/{resource}/{name}` - 获取资源详情
+   - `/resources/{group}/{version}/{resource}` (POST) - 通过 GVR 创建资源
+   - `/resources/{group}/{version}/{resource}/{name}` (PUT) - 通过 GVR 更新资源
+   - `/resources/{group}/{version}/{resource}/{name}` (DELETE) - 通过 GVR 删除资源
 
-7. **Pod 日志路由**:
-   - `/namespaces/{namespace}/pods/{name}/logs` - 获取 Pod 日志
+**单条详情说明**:
+- 当前未暴露 `GET /resources/{group}/{version}/{resource}/{name}`。
+- 前端查询单条资源建议使用列表接口 + 字段选择器：
+  - `/resources/{group}/{version}/{resource}?namespace={ns}&fieldSelector=metadata.name={name}`
 
 **路由特性**:
 - 所有路由都支持 JSON 格式的请求和响应
@@ -380,20 +352,19 @@ Kubernetes API Server
 响应返回（反向流程）
 ```
 
-### 示例：获取 Pod 列表
+### 示例：获取 Pod 列表（统一 GVR）
 
-1. 客户端发送: `GET /kapis/resources.kubespark.io/v1alpha1/pods`
+1. 客户端发送: `GET /kapis/resources.kubespark.io/v1alpha1/resources/core/v1/pods?namespace=default`
 2. CORSFilter: 添加 CORS 响应头
 3. LoggingFilter: 记录请求开始时间
-4. Routes: 匹配到 `ListPods` 路由
-5. Handler.ListPods(): 调用处理器方法
-6. Handler.handleListResource(): 解析查询参数
-7. ResourcesOperator.ListResources(): 调用业务逻辑
-8. K8s Client: 执行 `clientset.CoreV1().Pods(namespace).List()`
-9. Kubernetes API: 返回 Pod 列表
-10. 响应序列化: 将结果序列化为 JSON
-11. LoggingFilter: 记录响应时间和状态码
-12. 返回响应: 发送 JSON 响应给客户端
+4. Routes: 匹配到 `GET /resources/{group}/{version}/{resource}`
+5. Handler.GetResourceByGVR(): 构造 `GroupVersionResource`
+6. ResourcesOperator.ListResourcesByGVR(): 调用动态客户端
+7. K8s Client: 执行 `dynamicClient.Resource(gvr).Namespace("default").List()`
+8. Kubernetes API: 返回 Pod 列表
+9. 响应序列化: 将结果序列化为 JSON
+10. LoggingFilter: 记录响应时间和状态码
+11. 返回响应: 发送 JSON 响应给客户端
 
 ---
 
@@ -405,12 +376,9 @@ Kubernetes API Server
    - 在 `ListResources()` 的 switch 语句中添加新的 case
    - 在 `GetResource()` 的 switch 语句中添加新的 case（如果需要）
 
-2. **在 `pkg/kapis/resources/v1alpha1/handler.go` 中**:
-   - 添加新的处理方法，如 `ListNewResource()`
-   - 实现 `handleListResource()` 调用
-
-3. **在 `pkg/kapis/resources/v1alpha1/routes.go` 中**:
-   - 在 `AddToContainer()` 中添加新的路由注册
+2. **优先使用统一 GVR 路由**:
+   - 大多数内置资源和 CRD 都可直接通过 `/resources/{group}/{version}/{resource}` 访问
+   - 通常无需新增固定快捷路由
 
 ### 添加新的 API 端点
 
@@ -436,4 +404,3 @@ KubeSpark 项目采用清晰的分层架构，各模块职责明确：
 - **pkg/kapis/resources/v1alpha1**: API 处理层，处理 HTTP 请求
 
 这种架构设计使得项目易于维护、测试和扩展，同时保持了代码的清晰性和可读性。
-
