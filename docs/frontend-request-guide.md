@@ -4,7 +4,7 @@
 
 ## 1. 统一入口
 
-- 基础路径：`/kapis/resources.kubespark.io/v1alpha1`
+- 基础路径：`/kapis/v1alpha1`
 - 统一资源路径：`/resources/{group}/{version}/{resource}`
 
 说明：

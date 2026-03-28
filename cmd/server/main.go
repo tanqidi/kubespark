@@ -61,7 +61,7 @@ func main() {
 					Type:        "apiKey",
 					Name:        "Authorization",
 					In:          "header",
-					Description: "JWT Bearer Token authentication. Enter 'Bearer {token}' (include 'Bearer' prefix). Get token from POST /kapis/auth.kubespark.io/v1/login",
+					Description: "JWT Bearer Token authentication. Enter 'Bearer {token}' (include 'Bearer' prefix). Get token from POST /kapis/auth/v1/login",
 				},
 			}
 
@@ -69,7 +69,7 @@ func main() {
 			if swo.Paths != nil && swo.Paths.Paths != nil {
 				for path, pathItem := range swo.Paths.Paths {
 					// Skip login endpoint (health check also requires auth)
-					if path == "/kapis/auth.kubespark.io/v1/login" {
+					if path == "/kapis/auth/v1/login" {
 						continue
 					}
 
@@ -130,7 +130,7 @@ func main() {
 								// Add authentication notice
 								var authNotice = document.createElement('div');
 								authNotice.style.cssText = 'background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; padding: 15px; margin: 20px; color: #856404;';
-								authNotice.innerHTML = '<strong>🔐 认证说明：</strong>大部分 API 接口需要 JWT Token 认证。请先调用 <code>POST /kapis/auth.kubespark.io/v1/login</code> 接口获取 Token，然后在右上角点击 "Authorize" 按钮，输入 <code>Bearer {your-token}</code>（包含 "Bearer" 前缀）。';
+								authNotice.innerHTML = '<strong>🔐 认证说明：</strong>大部分 API 接口需要 JWT Token 认证。请先调用 <code>POST /kapis/auth/v1/login</code> 接口获取 Token，然后在右上角点击 "Authorize" 按钮，输入 <code>Bearer {your-token}</code>（包含 "Bearer" 前缀）。';
 								var swaggerContainer = document.querySelector('#swagger-ui');
 								if (swaggerContainer) {
 									swaggerContainer.insertBefore(authNotice, swaggerContainer.firstChild);
@@ -173,7 +173,7 @@ func main() {
 			<body>
 				<div class="container">
 					<h1>Kubespark API Server</h1>
-					<p>统一资源接口（GVR）入口：<code>/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}</code></p>
+					<p>统一资源接口（GVR）入口：<code>/kapis/v1alpha1/resources/{group}/{version}/{resource}</code></p>
 
 					<div class="api-list">
 						<h2>文档与鉴权</h2>
@@ -189,7 +189,7 @@ func main() {
 						</div>
 						<div class="api-item">
 							<span class="method">GET</span>
-							<code class="endpoint">/kapis/auth.kubespark.io/v1/healthz</code>
+							<code class="endpoint">/kapis/auth/v1/healthz</code>
 							- 服务健康检查
 						</div>
 					</div>
@@ -198,33 +198,33 @@ func main() {
 						<h2>通用接口用法</h2>
 						<div class="api-item">
 							<span class="method">GET</span>
-							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}?namespace=bb</code>
+							<code class="endpoint">/kapis/v1alpha1/resources/{group}/{version}/{resource}?namespace=bb</code>
 							- 列表查询（<code>namespace</code> 仅对命名空间级资源生效）
 						</div>
 						<div class="api-item">
 							<span class="method">GET</span>
-							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
+							<code class="endpoint">/kapis/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
 							- 单条详情
 						</div>
 						<div class="api-item">
 							<span class="method">POST</span>
-							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}?namespace=bb</code>
+							<code class="endpoint">/kapis/v1alpha1/resources/{group}/{version}/{resource}?namespace=bb</code>
 							- 创建资源（Body 为 Kubernetes 资源 JSON）
 						</div>
 						<div class="api-item">
 							<span class="method">PUT</span>
-							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
+							<code class="endpoint">/kapis/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
 							- 更新资源
 						</div>
 						<div class="api-item">
 							<span class="method">DELETE</span>
-							<code class="endpoint">/kapis/resources.kubespark.io/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
+							<code class="endpoint">/kapis/v1alpha1/resources/{group}/{version}/{resource}/{name}?namespace=bb</code>
 							- 删除资源
 						</div>
 					</div>
 
 					<div class="note">
-						<p><strong>认证说明：</strong>大部分 API 接口需要 JWT Token。先调用 <code>/kapis/auth.kubespark.io/v1/login</code> 获取 Token，请求头带上 <code>Authorization: Bearer {token}</code>。</p>
+						<p><strong>认证说明：</strong>大部分 API 接口需要 JWT Token。先调用 <code>/kapis/auth/v1/login</code> 获取 Token，请求头带上 <code>Authorization: Bearer {token}</code>。</p>
 						<p><strong>常用筛选参数：</strong></p>
 						<ul>
 							<li><code>?namespace=bb</code> - 命名空间过滤</li>
@@ -235,7 +235,7 @@ func main() {
 
 					<div class="warn">
 						<p><strong>GVR 说明：</strong>核心组资源使用 <code>group=core</code>（例如 Service: <code>/resources/core/v1/services</code>）；非核心组示例：Deployment 使用 <code>/resources/apps/v1/deployments</code>。</p>
-						<p><a href="/kapis/auth.kubespark.io/v1/healthz">Health Check</a></p>
+						<p><a href="/kapis/auth/v1/healthz">Health Check</a></p>
 						<p><a href="/swagger">Swagger UI</a></p>
 					</div>
 				</div>

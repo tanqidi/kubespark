@@ -97,7 +97,7 @@ Deployment 属于 apps group：
 
 例如：
 
-/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/pods
+/kapis/v1alpha1/resources/core/v1/pods
 
 但在真正调用 Kubernetes client-go / dynamic client 时，必须做一次转换：
 

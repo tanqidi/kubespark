@@ -7,7 +7,7 @@ import (
 // AddToContainer adds routes to the container
 func (h *Handler) AddToContainer(container *restful.Container) {
 	ws := new(restful.WebService)
-	ws.Path("/kapis/resources.kubespark.io/v1alpha1").
+	ws.Path("/kapis/v1alpha1").
 		Consumes(restful.MIME_JSON).
 		Produces(restful.MIME_JSON)
 

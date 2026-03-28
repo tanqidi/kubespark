@@ -43,7 +43,7 @@ func (s *Server) Container() *restful.Container {
 func (s *Server) Start() error {
 	log.Printf("🚀 Kubespark API server starting on %s", s.httpServer.Addr)
 	log.Printf("📚 API Documentation available at http://localhost%s", s.httpServer.Addr)
-	log.Printf("🔗 Kubernetes API available at /kapis/resources.kubespark.io/v1alpha1/*")
+	log.Printf("🔗 Kubernetes API available at /kapis/v1alpha1/*")
 
 	return s.httpServer.ListenAndServe()
 }

@@ -75,7 +75,7 @@ echo "JWT Secret: $KUBESPARK_JWT_SECRET"
 
 ### 基本信息
 
-- **URL**: `/kapis/auth.kubespark.io/v1/login`
+- **URL**: `/kapis/auth/v1/login`
 - **方法**: `POST`
 - **Content-Type**: `application/json`
 - **认证**: 无需认证（公开端点）
@@ -185,7 +185,7 @@ echo "JWT Secret: $KUBESPARK_JWT_SECRET"
 客户端向登录端点发送 POST 请求，包含用户名和密码：
 
 ```bash
-curl -X POST http://localhost:8080/kapis/auth.kubespark.io/v1/login \
+curl -X POST http://localhost:8080/kapis/auth/v1/login \
   -H "Content-Type: application/json" \
   -d '{
     "username": "admin",
@@ -347,7 +347,7 @@ Token 验证采用**三层验证机制**，确保最高级别的安全性：
 所有 API 请求（除登录端点外）都需要通过 `AuthFilter` 进行认证验证。
 
 **免认证的端点**：
-- `/kapis/auth.kubespark.io/v1/login` - 登录端点
+- `/kapis/auth/v1/login` - 登录端点
 - `/swagger` - API 文档
 - `/` - 根路径
 - `/apidocs.json` - API 文档 JSON
@@ -401,13 +401,13 @@ Authorization: Bearer <token>
 
 ```bash
 # 1. 登录获取 Token
-TOKEN=$(curl -X POST http://localhost:8080/kapis/auth.kubespark.io/v1/login \
+TOKEN=$(curl -X POST http://localhost:8080/kapis/auth/v1/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"123456"}' \
   | jq -r '.data.token')
 
 # 2. 使用 Token 访问受保护的 API
-curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces \
+curl -X GET http://localhost:8080/kapis/v1alpha1/resources/core/v1/namespaces \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -419,7 +419,7 @@ curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resource
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces
+curl -X GET http://localhost:8080/kapis/v1alpha1/resources/core/v1/namespaces
 ```
 
 **响应** (401 Unauthorized):
@@ -434,7 +434,7 @@ curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resource
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces \
+curl -X GET http://localhost:8080/kapis/v1alpha1/resources/core/v1/namespaces \
   -H "Authorization: InvalidFormat token123"
 ```
 
@@ -455,7 +455,7 @@ Authorization: Bearer <token>
 
 **请求**:
 ```bash
-curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces \
+curl -X GET http://localhost:8080/kapis/v1alpha1/resources/core/v1/namespaces \
   -H "Authorization: Bearer invalid_token"
 ```
 
@@ -473,7 +473,7 @@ curl -X GET http://localhost:8080/kapis/resources.kubespark.io/v1alpha1/resource
 
 **请求**:
 ```bash
-curl -X POST http://localhost:8080/kapis/auth.kubespark.io/v1/login \
+curl -X POST http://localhost:8080/kapis/auth/v1/login \
   -H "Content-Type: application/json" \
   -d '{"username":"wrong","password":"wrong"}'
 ```
@@ -522,7 +522,7 @@ func login(baseURL, username, password string) (string, error) {
 
     jsonData, _ := json.Marshal(loginReq)
     resp, err := http.Post(
-        baseURL+"/kapis/auth.kubespark.io/v1/login",
+        baseURL+"/kapis/auth/v1/login",
         "application/json",
         bytes.NewBuffer(jsonData),
     )
@@ -564,7 +564,7 @@ func main() {
     
     // 使用 Token 访问 API
     resp, err := makeAuthenticatedRequest(
-        baseURL+"/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces",
+        baseURL+"/kapis/v1alpha1/resources/core/v1/namespaces",
         token,
     )
     if err != nil {
@@ -587,7 +587,7 @@ BASE_URL = "http://localhost:8080"
 
 def login(username, password):
     """登录并获取 Token"""
-    url = f"{BASE_URL}/kapis/auth.kubespark.io/v1/login"
+    url = f"{BASE_URL}/kapis/auth/v1/login"
     payload = {
         "username": username,
         "password": password
@@ -621,7 +621,7 @@ if __name__ == "__main__":
     
     # 访问受保护的 API
     namespaces = make_authenticated_request(
-        f"{BASE_URL}/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces",
+        f"{BASE_URL}/kapis/v1alpha1/resources/core/v1/namespaces",
         token
     )
     print(f"Namespaces: {json.dumps(namespaces, indent=2)}")
@@ -636,7 +636,7 @@ const BASE_URL = 'http://localhost:8080';
 
 async function login(username, password) {
     const response = await axios.post(
-        `${BASE_URL}/kapis/auth.kubespark.io/v1/login`,
+        `${BASE_URL}/kapis/auth/v1/login`,
         { username, password }
     );
     
@@ -666,7 +666,7 @@ async function makeAuthenticatedRequest(url, token) {
         
         // 访问受保护的 API
         const namespaces = await makeAuthenticatedRequest(
-            `${BASE_URL}/kapis/resources.kubespark.io/v1alpha1/resources/core/v1/namespaces`,
+            `${BASE_URL}/kapis/v1alpha1/resources/core/v1/namespaces`,
             token
         );
         console.log('Namespaces:', JSON.stringify(namespaces, null, 2));

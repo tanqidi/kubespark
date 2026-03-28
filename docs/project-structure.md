@@ -51,7 +51,7 @@ kubespark/
 3. **API 处理器创建**: 创建 API 处理器，处理 HTTP 请求
 4. **服务器创建**: 创建 HTTP 服务器实例
 5. **路由注册**: 将 API 路由注册到服务器容器
-6. **健康检查端点**: 提供 `/kapis/auth.kubespark.io/v1/healthz` 端点，检查 Kubernetes API 连接状态
+6. **健康检查端点**: 提供 `/kapis/auth/v1/healthz` 端点，检查 Kubernetes API 连接状态
 7. **欢迎页面**: 提供根路径 `/` 的 HTML 欢迎页面，展示所有可用的 API 端点
 8. **优雅关闭**: 监听系统信号（SIGINT、SIGTERM），实现优雅关闭
 
@@ -245,7 +245,7 @@ main() {
 - 定义路由参数和文档
 
 **路由结构**:
-- 基础路径: `/kapis/resources.kubespark.io/v1alpha1`
+- 基础路径: `/kapis/v1alpha1`
 - 所有 API 端点都在此路径下
 
 **路由分类**:
@@ -354,7 +354,7 @@ Kubernetes API Server
 
 ### 示例：获取 Pod 列表（统一 GVR）
 
-1. 客户端发送: `GET /kapis/resources.kubespark.io/v1alpha1/resources/core/v1/pods?namespace=default`
+1. 客户端发送: `GET /kapis/v1alpha1/resources/core/v1/pods?namespace=default`
 2. CORSFilter: 添加 CORS 响应头
 3. LoggingFilter: 记录请求开始时间
 4. Routes: 匹配到 `GET /resources/{group}/{version}/{resource}`

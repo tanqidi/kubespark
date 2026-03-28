@@ -26,7 +26,7 @@ func AuthFilter(req *restful.Request, resp *restful.Response, chain *restful.Fil
 	}
 
 	// Allow login endpoint
-	if strings.HasPrefix(path, "/kapis/auth.kubespark.io/v1/login") {
+	if strings.HasPrefix(path, "/kapis/auth/v1/login") {
 		chain.ProcessFilter(req, resp)
 		return
 	}
