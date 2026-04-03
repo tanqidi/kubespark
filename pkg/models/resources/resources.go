@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -149,4 +150,15 @@ func (r *ResourcesOperator) GetPodLogs(ctx context.Context, namespace string, na
 		Timestamps: true,
 	}
 	return r.k8sClient.Kubernetes().CoreV1().Pods(namespace).GetLogs(name, opts).DoRaw(ctx)
+}
+
+// StreamPodLogs streams logs from a pod in follow mode.
+func (r *ResourcesOperator) StreamPodLogs(ctx context.Context, namespace string, name string, container string, tailLines *int64) (io.ReadCloser, error) {
+	opts := &corev1.PodLogOptions{
+		Container:  container,
+		TailLines:  tailLines,
+		Timestamps: true,
+		Follow:     true,
+	}
+	return r.k8sClient.Kubernetes().CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
 }

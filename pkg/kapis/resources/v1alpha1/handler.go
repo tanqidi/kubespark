@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -321,6 +322,7 @@ func (h *Handler) GetPodLogs(req *restful.Request, resp *restful.Response) {
 	namespace := req.QueryParameter("namespace")
 	container := req.QueryParameter("container")
 	tailLinesStr := req.QueryParameter("tailLines")
+	followStr := req.QueryParameter("follow")
 
 	// Translate "core" from HTTP path to Kubernetes core group.
 	if group == "core" {
@@ -354,13 +356,61 @@ func (h *Handler) GetPodLogs(req *restful.Request, resp *restful.Response) {
 		tailLines = &parsed
 	}
 
+	follow := false
+	if followStr != "" {
+		parsed, err := strconv.ParseBool(followStr)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "follow must be a boolean")
+			return
+		}
+		follow = parsed
+	}
+
+	resp.Header().Set("Content-Type", "text/plain")
+	resp.Header().Set("Cache-Control", "no-cache")
+
+	if follow {
+		stream, err := h.resourcesOperator.StreamPodLogs(req.Request.Context(), namespace, name, container, tailLines)
+		if err != nil {
+			h.handleError(resp, err)
+			return
+		}
+		defer stream.Close()
+
+		flusher, _ := resp.ResponseWriter.(http.Flusher)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := stream.Read(buf)
+			if n > 0 {
+				if _, wErr := resp.ResponseWriter.Write(buf[:n]); wErr != nil {
+					err = wErr
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				// Client disconnects are expected when user closes dialog / stops follow.
+				if !strings.Contains(strings.ToLower(err.Error()), "broken pipe") &&
+					!strings.Contains(strings.ToLower(err.Error()), "connection reset by peer") &&
+					!strings.Contains(strings.ToLower(err.Error()), "context canceled") {
+					h.handleError(resp, err)
+				}
+				break
+			}
+		}
+		return
+	}
+
 	logs, err := h.resourcesOperator.GetPodLogs(req.Request.Context(), namespace, name, container, tailLines)
 	if err != nil {
 		h.handleError(resp, err)
 		return
 	}
 
-	resp.Header().Set("Content-Type", "text/plain")
 	resp.Write(logs)
 }
 

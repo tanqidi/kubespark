@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"io"
 
 	"kubespark/pkg/simple/client/k8s"
 
@@ -18,6 +19,7 @@ type Interface interface {
 	ListResourcesByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, options metav1.ListOptions) (runtime.Object, error)
 	GetClusterInfo(ctx context.Context) (map[string]interface{}, error)
 	GetPodLogs(ctx context.Context, namespace string, name string, container string, tailLines *int64) ([]byte, error)
+	StreamPodLogs(ctx context.Context, namespace string, name string, container string, tailLines *int64) (io.ReadCloser, error)
 
 	// Generic CRUD based on GroupVersionResource, using dynamic client.
 	CreateResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured, options metav1.CreateOptions) (runtime.Object, error)

@@ -57,6 +57,7 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
 		Param(ws.QueryParameter("container", "Container name").DataType("string")).
 		Param(ws.QueryParameter("tailLines", "Number of log lines from the end").DataType("integer")).
+		Param(ws.QueryParameter("follow", "Whether to stream logs continuously").DataType("boolean")).
 		Produces("text/plain").
 		Doc("Get logs by GVR (currently supports core/v1 pods only)"))
 
