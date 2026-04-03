@@ -61,5 +61,18 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 		Produces("text/plain").
 		Doc("Get logs by GVR (currently supports core/v1 pods only)"))
 
+	// Exec into a resource by GVR (currently supports core/v1 pods only)
+	ws.Route(ws.GET("/resources/{group}/{version}/{resource}/{name}/exec").To(h.ExecPodByGVR).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.PathParameter("name", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Param(ws.QueryParameter("container", "Container name").DataType("string")).
+		Param(ws.QueryParameter("command", "Command argument, can be repeated").DataType("string")).
+		Param(ws.QueryParameter("tty", "Enable TTY").DataType("boolean")).
+		Param(ws.QueryParameter("token", "JWT token for websocket auth fallback").DataType("string")).
+		Doc("Exec by GVR over WebSocket (currently supports core/v1 pods only)"))
+
 	container.Add(ws)
 }

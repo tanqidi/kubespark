@@ -34,6 +34,20 @@ func AuthFilter(req *restful.Request, resp *restful.Response, chain *restful.Fil
 	// Extract token from Authorization header
 	authHeader := req.HeaderParameter("Authorization")
 	if authHeader == "" {
+		// Query token fallback for websocket exec endpoint (browser WebSocket cannot set custom Authorization header).
+		if strings.HasSuffix(path, "/exec") {
+			token := req.QueryParameter("token")
+			if token != "" {
+				claims, err := auth.ValidateToken(token)
+				if err != nil {
+					kapis.WriteErrorWithCode(resp, http.StatusUnauthorized, http.StatusUnauthorized, "Invalid or expired token")
+					return
+				}
+				req.SetAttribute("username", claims.Username)
+				chain.ProcessFilter(req, resp)
+				return
+			}
+		}
 		kapis.WriteErrorWithCode(resp, http.StatusUnauthorized, http.StatusUnauthorized, "Missing authorization token")
 		return
 	}

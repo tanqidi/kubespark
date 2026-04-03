@@ -15,12 +15,14 @@ import (
 type Interface interface {
 	Kubernetes() kubernetes.Interface
 	Dynamic() dynamic.Interface
+	RESTConfig() *rest.Config
 }
 
 // Client wraps Kubernetes clients
 type Client struct {
 	kubernetes kubernetes.Interface
 	dynamic    dynamic.Interface
+	config     *rest.Config
 }
 
 // Kubernetes returns the standard Kubernetes clientset
@@ -31,6 +33,11 @@ func (c *Client) Kubernetes() kubernetes.Interface {
 // Dynamic returns the dynamic client for handling all resources
 func (c *Client) Dynamic() dynamic.Interface {
 	return c.dynamic
+}
+
+// RESTConfig returns Kubernetes REST config for advanced subresources.
+func (c *Client) RESTConfig() *rest.Config {
+	return c.config
 }
 
 // NewClient creates a new Kubernetes client
@@ -73,6 +80,6 @@ func NewClient() (Interface, error) {
 	return &Client{
 		kubernetes: clientset,
 		dynamic:    dynamicClient,
+		config:     config,
 	}, nil
 }
-

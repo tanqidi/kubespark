@@ -1,19 +1,24 @@
 package v1alpha1
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"kubespark/pkg/kapis"
 	"kubespark/pkg/models/resources"
 
 	restful "github.com/emicklei/go-restful/v3"
+	"github.com/gorilla/websocket"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // Handler handles API requests for resources
@@ -412,6 +417,205 @@ func (h *Handler) GetPodLogs(req *restful.Request, resp *restful.Response) {
 	}
 
 	resp.Write(logs)
+}
+
+type execClientMessage struct {
+	Op   string `json:"op"`
+	Data string `json:"data,omitempty"`
+	Cols uint16 `json:"cols,omitempty"`
+	Rows uint16 `json:"rows,omitempty"`
+}
+
+type execServerMessage struct {
+	Op      string `json:"op"`
+	Data    string `json:"data,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type terminalSizeQueue struct {
+	ch chan remotecommand.TerminalSize
+}
+
+func newTerminalSizeQueue() *terminalSizeQueue {
+	return &terminalSizeQueue{ch: make(chan remotecommand.TerminalSize, 8)}
+}
+
+func (q *terminalSizeQueue) Next() *remotecommand.TerminalSize {
+	size, ok := <-q.ch
+	if !ok {
+		return nil
+	}
+	return &size
+}
+
+func (q *terminalSizeQueue) Push(cols, rows uint16) {
+	select {
+	case q.ch <- remotecommand.TerminalSize{Width: cols, Height: rows}:
+	default:
+	}
+}
+
+func (q *terminalSizeQueue) Close() {
+	close(q.ch)
+}
+
+// ExecPodByGVR executes into pod container over websocket.
+func (h *Handler) ExecPodByGVR(req *restful.Request, resp *restful.Response) {
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
+	resource := req.PathParameter("resource")
+	name := req.PathParameter("name")
+	namespace := req.QueryParameter("namespace")
+	container := req.QueryParameter("container")
+	command := req.Request.URL.Query()["command"]
+	tty := true
+	if ttyRaw := req.QueryParameter("tty"); ttyRaw != "" {
+		parsed, err := strconv.ParseBool(ttyRaw)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "tty must be a boolean")
+			return
+		}
+		tty = parsed
+	}
+	if len(command) == 0 {
+		command = []string{"/bin/sh"}
+	}
+
+	if group == "core" {
+		group = ""
+	}
+	if group != "" || version != "v1" || !strings.EqualFold(resource, "pods") {
+		kapis.WriteErrorWithCode(
+			resp,
+			http.StatusBadRequest,
+			http.StatusBadRequest,
+			"exec subresource is currently supported only for core/v1 pods",
+		)
+		return
+	}
+	if namespace == "" {
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace is required")
+		return
+	}
+
+	ctx, cancel := context.WithCancel(req.Request.Context())
+	defer cancel()
+
+	stdinReader, stdinWriter := io.Pipe()
+	stdoutReader, stdoutWriter := io.Pipe()
+	stderrReader, stderrWriter := io.Pipe()
+	sizeQueue := newTerminalSizeQueue()
+	// Provide an initial terminal size to avoid shells exiting early in TTY mode.
+	sizeQueue.Push(80, 24)
+	defer func() {
+		sizeQueue.Close()
+		_ = stdinWriter.Close()
+		_ = stdoutWriter.Close()
+		_ = stderrWriter.Close()
+		_ = stdinReader.Close()
+		_ = stdoutReader.Close()
+		_ = stderrReader.Close()
+	}()
+
+	uprader := websocket.Upgrader{
+		CheckOrigin: func(_ *http.Request) bool { return true },
+	}
+	conn, err := uprader.Upgrade(resp.ResponseWriter, req.Request, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	var writeMu sync.Mutex
+	send := func(msg execServerMessage) {
+		payload, mErr := json.Marshal(msg)
+		if mErr != nil {
+			return
+		}
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = conn.WriteMessage(websocket.TextMessage, payload)
+	}
+
+	pumpOutput := func(op string, reader io.Reader) {
+		buf := make([]byte, 32*1024)
+		for {
+			n, rErr := reader.Read(buf)
+			if n > 0 {
+				send(execServerMessage{Op: op, Data: string(buf[:n])})
+			}
+			if rErr != nil {
+				return
+			}
+		}
+	}
+
+	go pumpOutput("stdout", stdoutReader)
+	if !tty {
+		go pumpOutput("stderr", stderrReader)
+	}
+
+	execDone := make(chan error, 1)
+	go func() {
+		err := h.resourcesOperator.ExecPod(
+			ctx,
+			namespace,
+			name,
+			container,
+			command,
+			tty,
+			stdinReader,
+			stdoutWriter,
+			stderrWriter,
+			sizeQueue,
+		)
+		execDone <- err
+	}()
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			_, payload, rErr := conn.ReadMessage()
+			if rErr != nil {
+				cancel()
+				return
+			}
+
+			var msg execClientMessage
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				continue
+			}
+
+			switch msg.Op {
+			case "stdin":
+				if msg.Data != "" {
+					if _, err := io.WriteString(stdinWriter, msg.Data); err != nil {
+						cancel()
+						return
+					}
+				}
+			case "resize":
+				if msg.Cols > 0 && msg.Rows > 0 {
+					sizeQueue.Push(msg.Cols, msg.Rows)
+				}
+			case "close":
+				cancel()
+				return
+			}
+		}
+	}()
+
+	select {
+	case err := <-execDone:
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "context canceled") {
+			send(execServerMessage{Op: "error", Message: err.Error()})
+		} else {
+			send(execServerMessage{Op: "exit"})
+		}
+	case <-readDone:
+		cancel()
+	}
 }
 
 // handleListResource is a helper to handle list resource requests

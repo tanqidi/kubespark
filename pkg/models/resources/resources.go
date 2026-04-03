@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -12,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // ListResources lists resources by type
@@ -161,4 +164,37 @@ func (r *ResourcesOperator) StreamPodLogs(ctx context.Context, namespace string,
 		Follow:     true,
 	}
 	return r.k8sClient.Kubernetes().CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
+}
+
+// ExecPod executes a command in a pod container.
+func (r *ResourcesOperator) ExecPod(ctx context.Context, namespace string, name string, container string, command []string, tty bool, stdin io.Reader, stdout io.Writer, stderr io.Writer, terminalSizeQueue remotecommand.TerminalSizeQueue) error {
+	req := r.k8sClient.Kubernetes().CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(name).
+		Namespace(namespace).
+		SubResource("exec")
+
+	execOptions := &corev1.PodExecOptions{
+		Container: container,
+		Command:   command,
+		Stdin:     stdin != nil,
+		Stdout:    stdout != nil,
+		Stderr:    !tty && stderr != nil,
+		TTY:       tty,
+	}
+
+	req.VersionedParams(execOptions, scheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(r.k8sClient.RESTConfig(), http.MethodPost, req.URL())
+	if err != nil {
+		return err
+	}
+
+	return executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdin:             stdin,
+		Stdout:            stdout,
+		Stderr:            stderr,
+		Tty:               tty,
+		TerminalSizeQueue: terminalSizeQueue,
+	})
 }
