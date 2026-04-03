@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"kubespark/pkg/kapis"
 	"kubespark/pkg/models/resources"
@@ -313,16 +314,44 @@ func (h *Handler) GetResourceDetail(req *restful.Request, resp *restful.Response
 
 // GetPodLogs gets logs from a pod
 func (h *Handler) GetPodLogs(req *restful.Request, resp *restful.Response) {
-	namespace := req.PathParameter("namespace")
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
+	resource := req.PathParameter("resource")
 	name := req.PathParameter("name")
+	namespace := req.QueryParameter("namespace")
 	container := req.QueryParameter("container")
 	tailLinesStr := req.QueryParameter("tailLines")
 
+	// Translate "core" from HTTP path to Kubernetes core group.
+	if group == "core" {
+		group = ""
+	}
+
+	// Keep this endpoint aligned with GVR semantics while limiting scope
+	// to the pod log subresource for now.
+	if group != "" || version != "v1" || !strings.EqualFold(resource, "pods") {
+		kapis.WriteErrorWithCode(
+			resp,
+			http.StatusBadRequest,
+			http.StatusBadRequest,
+			"logs subresource is currently supported only for core/v1 pods",
+		)
+		return
+	}
+
+	if namespace == "" {
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace is required")
+		return
+	}
+
 	var tailLines *int64
 	if tailLinesStr != "" {
-		if parsed, err := strconv.ParseInt(tailLinesStr, 10, 64); err == nil {
-			tailLines = &parsed
+		parsed, err := strconv.ParseInt(tailLinesStr, 10, 64)
+		if err != nil || parsed < 1 {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "tailLines must be a positive integer")
+			return
 		}
+		tailLines = &parsed
 	}
 
 	logs, err := h.resourcesOperator.GetPodLogs(req.Request.Context(), namespace, name, container, tailLines)

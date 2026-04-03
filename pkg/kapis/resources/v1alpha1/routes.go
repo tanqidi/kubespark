@@ -48,5 +48,17 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
 		Doc("Delete resource by GVR (Group Version Resource)"))
 
+	// Get logs from a resource by GVR (currently supports core/v1 pods only)
+	ws.Route(ws.GET("/resources/{group}/{version}/{resource}/{name}/log").To(h.GetPodLogs).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.PathParameter("name", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Param(ws.QueryParameter("container", "Container name").DataType("string")).
+		Param(ws.QueryParameter("tailLines", "Number of log lines from the end").DataType("integer")).
+		Produces("text/plain").
+		Doc("Get logs by GVR (currently supports core/v1 pods only)"))
+
 	container.Add(ws)
 }
