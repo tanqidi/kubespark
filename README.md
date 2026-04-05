@@ -12,7 +12,7 @@ KubeSpark 是一个基于 Go + client-go + go-restful 的 Kubernetes 资源管�
 ### 1. 本地启动
 
 ```bash
-go run ./cmd/server --port=8080
+go run ./cmd/server/main.go
 ```
 
 ### 2. 打开文档
@@ -64,13 +64,17 @@ curl -X GET http://localhost:8080/kapis/auth/v1/healthz \
   -H "Authorization: Bearer <your-token>"
 ```
 
-## 部署
+## 工作原理
 
-参考 `manifests/`：
+1. Pod 启动时，Kubernetes 会自动将 ServiceAccount 的 token 挂载到：
+   `/var/run/secrets/kubernetes.io/serviceaccount/`
 
-- `manifests/rbac.yaml`
-- `manifests/deployment.yaml`
-- `manifests/service.yaml`
+2. `kubespark/pkg/simple/client/k8s/client.go` 中的 `NewClient()` 函数会：
+   - 首先调用 `rest.InClusterConfig()` 读取挂载的 token
+   - 如果成功，就使用集群内配置（不需要 kubeconfig）
+   - 如果失败，才回退到读取 `~/.kube/config`
+
+3. 因此，只要 Pod 中配置了 `serviceAccountName`，就会自动使用集群内配置。
 
 ## 相关文档
 
@@ -79,3 +83,4 @@ curl -X GET http://localhost:8080/kapis/auth/v1/healthz \
 - `docs/project-structure.md`
 - `docs/core.md`
 - `docs/in-cluster-config-explained.md`
+
