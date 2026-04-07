@@ -419,6 +419,28 @@ func (h *Handler) GetPodLogs(req *restful.Request, resp *restful.Response) {
 	resp.Write(logs)
 }
 
+// GetResourceDescribeByGVR gets describe-like details from a resource by GVR.
+func (h *Handler) GetResourceDescribeByGVR(req *restful.Request, resp *restful.Response) {
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
+	resource := req.PathParameter("resource")
+	name := req.PathParameter("name")
+	namespace := req.QueryParameter("namespace")
+
+	if group == "core" {
+		group = ""
+	}
+	gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
+	describeText, err := h.resourcesOperator.DescribeResourceByGVR(req.Request.Context(), gvr, namespace, name)
+	if err != nil {
+		h.handleError(resp, err)
+		return
+	}
+	resp.Header().Set("Content-Type", "text/plain")
+	resp.Header().Set("Cache-Control", "no-cache")
+	_, _ = resp.Write([]byte(describeText))
+}
+
 type execClientMessage struct {
 	Op   string `json:"op"`
 	Data string `json:"data,omitempty"`

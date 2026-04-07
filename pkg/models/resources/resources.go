@@ -9,12 +9,15 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/remotecommand"
+	kubectldescribe "k8s.io/kubectl/pkg/describe"
 )
 
 // ListResources lists resources by type
@@ -197,4 +200,45 @@ func (r *ResourcesOperator) ExecPod(ctx context.Context, namespace string, name 
 		Tty:               tty,
 		TerminalSizeQueue: terminalSizeQueue,
 	})
+}
+
+// DescribeResourceByGVR returns a kubectl-style describe output for the target resource.
+func (r *ResourcesOperator) DescribeResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (string, error) {
+	groupResources, err := restmapper.GetAPIGroupResources(r.k8sClient.Kubernetes().Discovery())
+	if err != nil {
+		return "", err
+	}
+	mapper := restmapper.NewDiscoveryRESTMapper(groupResources)
+	gvk, err := mapper.KindFor(gvr)
+	if err != nil {
+		return "", err
+	}
+	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
+	if err != nil {
+		return "", err
+	}
+
+	if mapping.Scope.Name() == meta.RESTScopeNameNamespace && strings.TrimSpace(namespace) == "" {
+		return "", errors.NewBadRequest("query parameter namespace is required")
+	}
+
+	var (
+		describer kubectldescribe.ResourceDescriber
+		ok        bool
+	)
+	describer, ok = kubectldescribe.DescriberFor(mapping.GroupVersionKind.GroupKind(), r.k8sClient.RESTConfig())
+	if !ok {
+		describer, ok = kubectldescribe.GenericDescriberFor(mapping, r.k8sClient.RESTConfig())
+		if !ok {
+			return "", errors.NewBadRequest(fmt.Sprintf("no describer implemented for %s", mapping.GroupVersionKind.String()))
+		}
+	}
+
+	output, err := describer.Describe(namespace, name, kubectldescribe.DescriberSettings{
+		ShowEvents: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	return output, nil
 }

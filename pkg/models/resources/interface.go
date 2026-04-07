@@ -22,6 +22,7 @@ type Interface interface {
 	GetPodLogs(ctx context.Context, namespace string, name string, container string, tailLines *int64) ([]byte, error)
 	StreamPodLogs(ctx context.Context, namespace string, name string, container string, tailLines *int64) (io.ReadCloser, error)
 	ExecPod(ctx context.Context, namespace string, name string, container string, command []string, tty bool, stdin io.Reader, stdout io.Writer, stderr io.Writer, terminalSizeQueue remotecommand.TerminalSizeQueue) error
+	DescribeResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (string, error)
 
 	// Generic CRUD based on GroupVersionResource, using dynamic client.
 	CreateResourceByGVR(ctx context.Context, gvr schema.GroupVersionResource, namespace string, obj *unstructured.Unstructured, options metav1.CreateOptions) (runtime.Object, error)

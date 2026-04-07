@@ -61,6 +61,16 @@ func (h *Handler) AddToContainer(container *restful.Container) {
 		Produces("text/plain").
 		Doc("Get logs by GVR (currently supports core/v1 pods only)"))
 
+	// Get describe details from a resource by GVR
+	ws.Route(ws.GET("/resources/{group}/{version}/{resource}/{name}/describe").To(h.GetResourceDescribeByGVR).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.PathParameter("name", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Produces("text/plain").
+		Doc("Get describe details by GVR"))
+
 	// Exec into a resource by GVR (currently supports core/v1 pods only)
 	ws.Route(ws.GET("/resources/{group}/{version}/{resource}/{name}/exec").To(h.ExecPodByGVR).
 		Param(ws.PathParameter("group", "API group").DataType("string")).
