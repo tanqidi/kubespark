@@ -226,11 +226,16 @@ func (h *Handler) CreateResourceByGVR(req *restful.Request, resp *restful.Respon
 		return
 	}
 
-	if h.isPipelineRunGVR(group, version, resource) {
-		h.handlePipelineRunCreated(created)
-	}
-
 	kapis.WriteCreated(resp, created)
+
+	if h.isPipelineRunGVR(group, version, resource) {
+		if createdObj, ok := created.(*unstructured.Unstructured); ok && createdObj != nil {
+			createdCopy := createdObj.DeepCopy()
+			go h.handlePipelineRunCreated(createdCopy)
+		} else {
+			go h.handlePipelineRunCreated(created)
+		}
+	}
 }
 
 // UpdateResourceByGVR updates a resource by Group Version Resource
@@ -750,31 +755,75 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	if err := h.ensurePipelineRepoActive(repoNamespace, repoName); err != nil {
+		log.Printf("[pipeline-run] ensure repo active failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
+		return
+	}
+
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer buildCancel()
 
 	log.Printf("[pipeline-run] trigger build start: run=%s pipeline=%s namespace=%s repo=%s", runName, pipelineName, repoNamespace, repoName)
-	result, err := h.droneClient.CreateBuild(ctx, repoNamespace, repoName, buildSpec)
+	result, err := h.droneClient.CreateBuild(buildCtx, repoNamespace, repoName, buildSpec)
 	if err != nil {
 		log.Printf("[pipeline-run] trigger build failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
-		if strings.Contains(err.Error(), "404") {
-			log.Printf("[pipeline-run] repo may be inactive, trying activate: namespace=%s repo=%s", repoNamespace, repoName)
-			if _, activateErr := h.droneClient.ActivateRepo(ctx, repoNamespace, repoName); activateErr != nil {
-				log.Printf("[pipeline-run] activate repo failed: namespace=%s repo=%s err=%v", repoNamespace, repoName, activateErr)
-				return
-			}
-			log.Printf("[pipeline-run] activate repo success, retry build: namespace=%s repo=%s", repoNamespace, repoName)
-			result, err = h.droneClient.CreateBuild(ctx, repoNamespace, repoName, buildSpec)
-			if err != nil {
-				log.Printf("[pipeline-run] retry build failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
-				return
-			}
-		} else {
-			return
-		}
+		return
 	}
 
 	log.Printf("[pipeline-run] trigger build success: run=%s pipeline=%s namespace=%s repo=%s result=%v", runName, pipelineName, repoNamespace, repoName, result)
+}
+
+func (h *Handler) ensurePipelineRepoActive(namespace, repo string) error {
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer checkCancel()
+
+	result, err := h.droneClient.ListRepos(checkCtx)
+	if err != nil {
+		return fmt.Errorf("list repos failed: %w", err)
+	}
+
+	found, active := findDroneRepoStatus(result, namespace, repo)
+	if found && active {
+		log.Printf("[pipeline-run] repo already active: namespace=%s repo=%s", namespace, repo)
+		return nil
+	}
+
+	if found && !active {
+		log.Printf("[pipeline-run] repo found but inactive, activating: namespace=%s repo=%s", namespace, repo)
+	} else {
+		log.Printf("[pipeline-run] repo not found in list, try activate/import: namespace=%s repo=%s", namespace, repo)
+	}
+
+	activateCtx, activateCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer activateCancel()
+	if _, err := h.droneClient.ActivateRepo(activateCtx, namespace, repo); err != nil {
+		return fmt.Errorf("activate repo failed: %w", err)
+	}
+	log.Printf("[pipeline-run] repo activate success: namespace=%s repo=%s", namespace, repo)
+	return nil
+}
+
+func findDroneRepoStatus(payload any, namespace, repo string) (bool, bool) {
+	items, ok := payload.([]any)
+	if !ok {
+		return false, false
+	}
+	targetNamespace := strings.TrimSpace(namespace)
+	targetRepo := strings.TrimSpace(repo)
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ns, _ := obj["namespace"].(string)
+		name, _ := obj["name"].(string)
+		if strings.TrimSpace(ns) != targetNamespace || strings.TrimSpace(name) != targetRepo {
+			continue
+		}
+		active, _ := obj["active"].(bool)
+		return true, active
+	}
+	return false, false
 }
 
 func (h *Handler) loadPipelineData(pipelineName string) map[string]string {
