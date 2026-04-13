@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"kubespark/pkg/kapis"
 	"kubespark/pkg/models/resources"
@@ -222,6 +224,10 @@ func (h *Handler) CreateResourceByGVR(req *restful.Request, resp *restful.Respon
 	if err != nil {
 		h.handleError(resp, err)
 		return
+	}
+
+	if h.isPipelineRunGVR(group, version, resource) {
+		h.handlePipelineRunCreated(created)
 	}
 
 	kapis.WriteCreated(resp, created)
@@ -683,6 +689,139 @@ func (h *Handler) parseListOptions(req *restful.Request) metav1.ListOptions {
 	}
 }
 
+func (h *Handler) isPipelineRunGVR(group, version, resource string) bool {
+	return strings.EqualFold(strings.TrimSpace(group), "tanqidi.com") &&
+		strings.EqualFold(strings.TrimSpace(version), "v1alpha1") &&
+		strings.EqualFold(strings.TrimSpace(resource), "pipelineruns")
+}
+
+func (h *Handler) handlePipelineRunCreated(created any) {
+	createdObj, ok := created.(*unstructured.Unstructured)
+	if !ok || createdObj == nil {
+		log.Printf("[pipeline-run] skip trigger: created object is not unstructured")
+		return
+	}
+	runName := strings.TrimSpace(createdObj.GetName())
+	log.Printf("[pipeline-run] created: name=%s", runName)
+
+	if h.droneClient == nil {
+		log.Printf("[pipeline-run] skip trigger: drone client not configured")
+		return
+	}
+
+	pipelineName, _, _ := unstructured.NestedString(createdObj.Object, "spec", "pipelineRef", "name")
+	pipelineName = strings.TrimSpace(pipelineName)
+	if pipelineName == "" {
+		log.Printf("[pipeline-run] skip trigger: missing spec.pipelineRef.name run=%s", runName)
+		return
+	}
+
+	runData, _, _ := unstructured.NestedStringMap(createdObj.Object, "spec", "data")
+	pipelineData := h.loadPipelineData(pipelineName)
+	merged := mergeStringMaps(pipelineData, runData)
+
+	repoNamespace := pickFirstNonEmpty(
+		merged["droneNamespace"],
+		merged["namespace"],
+		merged["repoNamespace"],
+	)
+	repoName := pickFirstNonEmpty(
+		merged["droneRepo"],
+		merged["repo"],
+		pipelineName,
+	)
+
+	if repoNamespace == "" || repoName == "" {
+		log.Printf("[pipeline-run] skip trigger: namespace/repo unresolved run=%s pipeline=%s", runName, pipelineName)
+		return
+	}
+
+	buildSpec := map[string]any{}
+	for k, v := range merged {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		switch key {
+		case "droneNamespace", "namespace", "repoNamespace", "droneRepo", "repo":
+			continue
+		default:
+			buildSpec[key] = v
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	log.Printf("[pipeline-run] trigger build start: run=%s pipeline=%s namespace=%s repo=%s", runName, pipelineName, repoNamespace, repoName)
+	result, err := h.droneClient.CreateBuild(ctx, repoNamespace, repoName, buildSpec)
+	if err != nil {
+		log.Printf("[pipeline-run] trigger build failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
+		if strings.Contains(err.Error(), "404") {
+			log.Printf("[pipeline-run] repo may be inactive, trying activate: namespace=%s repo=%s", repoNamespace, repoName)
+			if _, activateErr := h.droneClient.ActivateRepo(ctx, repoNamespace, repoName); activateErr != nil {
+				log.Printf("[pipeline-run] activate repo failed: namespace=%s repo=%s err=%v", repoNamespace, repoName, activateErr)
+				return
+			}
+			log.Printf("[pipeline-run] activate repo success, retry build: namespace=%s repo=%s", repoNamespace, repoName)
+			result, err = h.droneClient.CreateBuild(ctx, repoNamespace, repoName, buildSpec)
+			if err != nil {
+				log.Printf("[pipeline-run] retry build failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
+				return
+			}
+		} else {
+			return
+		}
+	}
+
+	log.Printf("[pipeline-run] trigger build success: run=%s pipeline=%s namespace=%s repo=%s result=%v", runName, pipelineName, repoNamespace, repoName, result)
+}
+
+func (h *Handler) loadPipelineData(pipelineName string) map[string]string {
+	pipelineGVR := schema.GroupVersionResource{
+		Group:    "tanqidi.com",
+		Version:  "v1alpha1",
+		Resource: "pipelines",
+	}
+
+	result, err := h.resourcesOperator.ListResourcesByGVR(context.Background(), pipelineGVR, "", metav1.ListOptions{
+		FieldSelector: "metadata.name=" + pipelineName,
+	})
+	if err != nil {
+		log.Printf("[pipeline-run] load pipeline failed: pipeline=%s err=%v", pipelineName, err)
+		return map[string]string{}
+	}
+
+	list, ok := result.(*unstructured.UnstructuredList)
+	if !ok || len(list.Items) == 0 {
+		log.Printf("[pipeline-run] pipeline not found: pipeline=%s", pipelineName)
+		return map[string]string{}
+	}
+
+	data, _, _ := unstructured.NestedStringMap(list.Items[0].Object, "spec", "data")
+	return data
+}
+
+func mergeStringMaps(base, override map[string]string) map[string]string {
+	merged := map[string]string{}
+	for k, v := range base {
+		merged[k] = strings.TrimSpace(v)
+	}
+	for k, v := range override {
+		merged[k] = strings.TrimSpace(v)
+	}
+	return merged
+}
+
+func pickFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func (h *Handler) isDroneGVR(group, version string) bool {
 	return strings.EqualFold(strings.TrimSpace(group), "drone") && strings.EqualFold(strings.TrimSpace(version), "v1")
 }
@@ -704,7 +843,7 @@ func (h *Handler) ensureDroneConfigured(resp *restful.Response) bool {
 		resp,
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
-		"drone integration is not configured, please set DRONE_SERVER and DRONE_TOKEN",
+		"drone integration is not configured, please set DRONE_SERVER/DRONE_TOKEN or provide secret drone-secret with DRONE_SERVER_HOST and DRONE_RPC_SECRET",
 	)
 	return false
 }
@@ -762,6 +901,7 @@ func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, 
 		return
 	}
 
+	log.Printf("[drone-gvr] list: resource=%s namespace=%s query=%s", resource, namespace, req.Request.URL.RawQuery)
 	ctx := req.Request.Context()
 	switch strings.ToLower(strings.TrimSpace(resource)) {
 	case "repos":
@@ -778,6 +918,7 @@ func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, 
 			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
 			return
 		}
+		log.Printf("[drone-gvr] list builds: namespace=%s repo=%s", ns, repo)
 		result, err := h.droneClient.ListBuilds(ctx, ns, repo)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
@@ -796,6 +937,7 @@ func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response
 		return
 	}
 
+	log.Printf("[drone-gvr] create: resource=%s namespace=%s query=%s", resource, namespace, req.Request.URL.RawQuery)
 	body, err := readBodyAsMap(req)
 	if err != nil {
 		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
@@ -810,6 +952,7 @@ func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response
 			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
 			return
 		}
+		log.Printf("[drone-gvr] activate repo: namespace=%s repo=%s", ns, repo)
 		result, err := h.droneClient.ActivateRepo(ctx, ns, repo)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
@@ -824,6 +967,7 @@ func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response
 			return
 		}
 		spec, _ := body["spec"].(map[string]any)
+		log.Printf("[drone-gvr] create build: namespace=%s repo=%s", ns, repo)
 		result, err := h.droneClient.CreateBuild(ctx, ns, repo, spec)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
@@ -842,6 +986,7 @@ func (h *Handler) handleDroneUpdate(req *restful.Request, resp *restful.Response
 		return
 	}
 
+	log.Printf("[drone-gvr] update: resource=%s namespace=%s name=%s query=%s", resource, namespace, name, req.Request.URL.RawQuery)
 	body, err := readBodyAsMap(req)
 	if err != nil {
 		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
@@ -860,6 +1005,7 @@ func (h *Handler) handleDroneUpdate(req *restful.Request, resp *restful.Response
 			return
 		}
 		spec, _ := body["spec"].(map[string]any)
+		log.Printf("[drone-gvr] update repo: namespace=%s repo=%s", ns, strings.TrimSpace(name))
 		result, err := h.droneClient.UpdateRepo(ctx, ns, strings.TrimSpace(name), spec)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
@@ -878,6 +1024,7 @@ func (h *Handler) handleDroneUpdate(req *restful.Request, resp *restful.Response
 			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "path parameter name must be build number")
 			return
 		}
+		log.Printf("[drone-gvr] restart build: namespace=%s repo=%s build=%d", ns, repo, number)
 		result, err := h.droneClient.RestartBuild(ctx, ns, repo, number)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
@@ -896,6 +1043,7 @@ func (h *Handler) handleDroneDelete(req *restful.Request, resp *restful.Response
 		return
 	}
 
+	log.Printf("[drone-gvr] delete: resource=%s namespace=%s name=%s query=%s", resource, namespace, name, req.Request.URL.RawQuery)
 	ctx := req.Request.Context()
 	switch strings.ToLower(strings.TrimSpace(resource)) {
 	case "repos":
@@ -904,6 +1052,7 @@ func (h *Handler) handleDroneDelete(req *restful.Request, resp *restful.Response
 			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace is required")
 			return
 		}
+		log.Printf("[drone-gvr] delete repo: namespace=%s repo=%s", ns, strings.TrimSpace(name))
 		result, err := h.droneClient.DeleteRepo(ctx, ns, strings.TrimSpace(name))
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
@@ -923,6 +1072,7 @@ func (h *Handler) handleDroneDelete(req *restful.Request, resp *restful.Response
 			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "path parameter name must be build number")
 			return
 		}
+		log.Printf("[drone-gvr] stop build: namespace=%s repo=%s build=%d", ns, repo, number)
 		result, err := h.droneClient.StopBuild(ctx, ns, repo, number)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
