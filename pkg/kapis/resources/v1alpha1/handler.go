@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"kubespark/pkg/kapis"
 	"kubespark/pkg/models/resources"
+	"kubespark/pkg/simple/client/drone"
 
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/gorilla/websocket"
@@ -24,12 +26,14 @@ import (
 // Handler handles API requests for resources
 type Handler struct {
 	resourcesOperator resources.Interface
+	droneClient       *drone.Client
 }
 
 // NewHandler creates a new API handler
 func NewHandler(resourcesOperator resources.Interface) *Handler {
 	return &Handler{
 		resourcesOperator: resourcesOperator,
+		droneClient:       drone.NewClientFromEnv(),
 	}
 }
 
@@ -154,6 +158,11 @@ func (h *Handler) GetResourceByGVR(req *restful.Request, resp *restful.Response)
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
 
+	if h.isDroneGVR(group, version) {
+		h.handleDroneList(req, resp, resource, namespace)
+		return
+	}
+
 	// In Kubernetes, core resources (like pods, services, etc.) live in the
 	// "core" API group, which is represented by an empty string "" in the
 	// GroupVersionResource. However, our HTTP route requires a non-empty
@@ -185,6 +194,11 @@ func (h *Handler) CreateResourceByGVR(req *restful.Request, resp *restful.Respon
 	version := req.PathParameter("version")
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
+
+	if h.isDroneGVR(group, version) {
+		h.handleDroneCreate(req, resp, resource, namespace)
+		return
+	}
 
 	// Translate "core" group from the HTTP path into the empty string that
 	// Kubernetes expects for core resources.
@@ -220,6 +234,11 @@ func (h *Handler) UpdateResourceByGVR(req *restful.Request, resp *restful.Respon
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
 	name := req.PathParameter("name")
+
+	if h.isDroneGVR(group, version) {
+		h.handleDroneUpdate(req, resp, resource, namespace, name)
+		return
+	}
 
 	// Translate "core" group from the HTTP path into the empty string that
 	// Kubernetes expects for core resources.
@@ -260,6 +279,11 @@ func (h *Handler) DeleteResourceByGVR(req *restful.Request, resp *restful.Respon
 	resource := req.PathParameter("resource")
 	namespace := req.QueryParameter("namespace")
 	name := req.PathParameter("name")
+
+	if h.isDroneGVR(group, version) {
+		h.handleDroneDelete(req, resp, resource, namespace, name)
+		return
+	}
 
 	// Translate "core" group from the HTTP path into the empty string that
 	// Kubernetes expects for core resources.
@@ -656,6 +680,259 @@ func (h *Handler) parseListOptions(req *restful.Request) metav1.ListOptions {
 	return metav1.ListOptions{
 		LabelSelector: req.QueryParameter("labelSelector"),
 		FieldSelector: req.QueryParameter("fieldSelector"),
+	}
+}
+
+func (h *Handler) isDroneGVR(group, version string) bool {
+	return strings.EqualFold(strings.TrimSpace(group), "drone") && strings.EqualFold(strings.TrimSpace(version), "v1")
+}
+
+func (h *Handler) parseNameFromFieldSelector(fieldSelector string) string {
+	const prefix = "metadata.name="
+	raw := strings.TrimSpace(fieldSelector)
+	if !strings.HasPrefix(raw, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(raw, prefix))
+}
+
+func (h *Handler) ensureDroneConfigured(resp *restful.Response) bool {
+	if h.droneClient != nil {
+		return true
+	}
+	kapis.WriteErrorWithCode(
+		resp,
+		http.StatusServiceUnavailable,
+		http.StatusServiceUnavailable,
+		"drone integration is not configured, please set DRONE_SERVER and DRONE_TOKEN",
+	)
+	return false
+}
+
+func readBodyAsMap(req *restful.Request) (map[string]any, error) {
+	payload := map[string]any{}
+	if req.Request.ContentLength == 0 {
+		return payload, nil
+	}
+	if err := req.ReadEntity(&payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func readStringFromMap(m map[string]any, path ...string) string {
+	var current any = m
+	for _, key := range path {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current, ok = obj[key]
+		if !ok {
+			return ""
+		}
+	}
+	value, ok := current.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func (h *Handler) resolveDroneRepo(namespace string, req *restful.Request, body map[string]any) (string, string, error) {
+	ns := strings.TrimSpace(namespace)
+	repo := strings.TrimSpace(req.QueryParameter("repo"))
+	if repo == "" {
+		repo = h.parseNameFromFieldSelector(req.QueryParameter("fieldSelector"))
+	}
+	if repo == "" {
+		repo = readStringFromMap(body, "metadata", "name")
+	}
+	if ns == "" {
+		ns = readStringFromMap(body, "metadata", "namespace")
+	}
+	if ns == "" || repo == "" {
+		return "", "", fmt.Errorf("query parameter namespace and repo are required")
+	}
+	return ns, repo, nil
+}
+
+func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, resource, namespace string) {
+	if !h.ensureDroneConfigured(resp) {
+		return
+	}
+
+	ctx := req.Request.Context()
+	switch strings.ToLower(strings.TrimSpace(resource)) {
+	case "repos":
+		result, err := h.droneClient.ListRepos(ctx)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, map[string]any{"items": result})
+		return
+	case "builds":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, map[string]any{})
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err := h.droneClient.ListBuilds(ctx, ns, repo)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, map[string]any{"items": result})
+		return
+	default:
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
+		return
+	}
+}
+
+func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response, resource, namespace string) {
+	if !h.ensureDroneConfigured(resp) {
+		return
+	}
+
+	body, err := readBodyAsMap(req)
+	if err != nil {
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx := req.Request.Context()
+	switch strings.ToLower(strings.TrimSpace(resource)) {
+	case "repos":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, body)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		result, err := h.droneClient.ActivateRepo(ctx, ns, repo)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteCreated(resp, result)
+		return
+	case "builds":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, body)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		spec, _ := body["spec"].(map[string]any)
+		result, err := h.droneClient.CreateBuild(ctx, ns, repo, spec)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteCreated(resp, result)
+		return
+	default:
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
+		return
+	}
+}
+
+func (h *Handler) handleDroneUpdate(req *restful.Request, resp *restful.Response, resource, namespace, name string) {
+	if !h.ensureDroneConfigured(resp) {
+		return
+	}
+
+	body, err := readBodyAsMap(req)
+	if err != nil {
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	ctx := req.Request.Context()
+	switch strings.ToLower(strings.TrimSpace(resource)) {
+	case "repos":
+		ns := strings.TrimSpace(namespace)
+		if ns == "" {
+			ns = readStringFromMap(body, "metadata", "namespace")
+		}
+		if ns == "" {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace is required")
+			return
+		}
+		spec, _ := body["spec"].(map[string]any)
+		result, err := h.droneClient.UpdateRepo(ctx, ns, strings.TrimSpace(name), spec)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
+	case "builds":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, body)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		number, err := strconv.ParseInt(strings.TrimSpace(name), 10, 64)
+		if err != nil || number <= 0 {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "path parameter name must be build number")
+			return
+		}
+		result, err := h.droneClient.RestartBuild(ctx, ns, repo, number)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
+	default:
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
+		return
+	}
+}
+
+func (h *Handler) handleDroneDelete(req *restful.Request, resp *restful.Response, resource, namespace, name string) {
+	if !h.ensureDroneConfigured(resp) {
+		return
+	}
+
+	ctx := req.Request.Context()
+	switch strings.ToLower(strings.TrimSpace(resource)) {
+	case "repos":
+		ns := strings.TrimSpace(namespace)
+		if ns == "" {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace is required")
+			return
+		}
+		result, err := h.droneClient.DeleteRepo(ctx, ns, strings.TrimSpace(name))
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
+	case "builds":
+		ns := strings.TrimSpace(namespace)
+		repo := strings.TrimSpace(req.QueryParameter("repo"))
+		if ns == "" || repo == "" {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace and repo are required")
+			return
+		}
+		number, err := strconv.ParseInt(strings.TrimSpace(name), 10, 64)
+		if err != nil || number <= 0 {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "path parameter name must be build number")
+			return
+		}
+		result, err := h.droneClient.StopBuild(ctx, ns, repo, number)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
+	default:
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
+		return
 	}
 }
 

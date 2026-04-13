@@ -55,3 +55,32 @@
 - 资源接口默认需要 JWT Token。
 - 请求头统一携带：`Authorization: Bearer {token}`。
 - 认证与登录流程以 `docs/authentication.md` 为准。
+
+## 7. Drone 资源约定（同样走 GVR）
+
+Drone 接口复用统一资源入口，不新增独立路由：
+
+- `GET /resources/drone/v1/repos`
+- `POST /resources/drone/v1/repos`
+- `PUT /resources/drone/v1/repos/{name}`
+- `DELETE /resources/drone/v1/repos/{name}`
+- `GET /resources/drone/v1/builds`
+- `POST /resources/drone/v1/builds`
+- `PUT /resources/drone/v1/builds/{name}`（`name` 为构建号）
+- `DELETE /resources/drone/v1/builds/{name}`（`name` 为构建号）
+
+参数约定：
+
+- `repos`：
+  - 创建时需要 `namespace` + 仓库名（可从 body `metadata.name` 读取）。
+  - 更新/删除时需要 `namespace` + 路径参数 `{name}`。
+- `builds`：
+  - 列表/创建需要 `namespace` + `repo`。
+  - 重启/停止需要 `namespace` + `repo` + 路径参数 `{name}`（构建号）。
+
+环境变量约定：
+
+- `DRONE_SERVER`
+- `DRONE_TOKEN`
+
+缺失时后端返回 `503`，提示 Drone 未配置。
