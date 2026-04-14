@@ -1,17 +1,17 @@
-# Drone GVR 接口说明
+# Drone 集成说明（GVR + YAML 扩展）
 
-本文记录 KubeSpark 后端对 Drone 的统一 GVR 接入约定，供前后端联调与后续维护使用。
+本文记录 KubeSpark 后端当前对 Drone 的两类能力：
 
-## 1. 设计目标
+- Drone API 的 GVR 代理（统一资源入口）
+- Drone Configuration Extension（动态 YAML，下发前读取平台配置）
 
-- 不新增独立 `/drone/*` 路由
-- 复用现有统一资源入口 `/kapis/v1alpha1/resources/{group}/{version}/{resource}`
-- 保持响应包装与现有资源接口一致
+## 1. 路由
 
-## 2. 路由映射
+### 1.1 Drone GVR 代理
 
-Drone 通过虚拟 GVR 暴露：
+统一入口：
 
+- `/kapis/v1alpha1/resources/{group}/{version}/{resource}`
 - `group=drone`
 - `version=v1`
 
@@ -31,82 +31,104 @@ Drone 通过虚拟 GVR 暴露：
 - `PUT /kapis/v1alpha1/resources/drone/v1/builds/{name}`
 - `DELETE /kapis/v1alpha1/resources/drone/v1/builds/{name}`
 
-## 3. 环境变量
+### 1.2 Drone YAML 扩展接口
 
-服务启动前需要配置：
+- `POST /kapis/v1alpha1/drone/yaml`
+- `GET /kapis/v1alpha1/drone/yaml`（用于手工调试）
 
-- `DRONE_SERVER`：Drone 服务地址，如 `http://drone.example.com`
-- `DRONE_TOKEN`：Drone API Token
+说明：
 
-若缺失任一配置，接口返回 `503 Service Unavailable`。
+- 该接口不是给前端调用，不走 JWT。
+- 该接口使用 `DRONE_YAML_SECRET` 做 HTTP Signature 验签（Drone 官方扩展机制）。
 
-## 4. 参数约定
+## 2. 环境变量
 
-## 4.1 repos
+### 2.1 Kubespark 后端
+
+- `DRONE_SERVER`：Drone 地址，例如 `http://172.31.0.88:30001`
+- `DRONE_TOKEN`：Drone API Token（触发构建）
+- `DRONE_YAML_SECRET`：YAML 扩展验签密钥（必须和 Drone Server 一致）
+
+### 2.2 Drone Server
+
+- `DRONE_YAML_ENDPOINT`：例如 `http://172.31.0.88:8080/kapis/v1alpha1/drone/yaml`
+- `DRONE_YAML_SECRET`：与 Kubespark 后端同值
+
+## 3. YAML 来源（平台托管）
+
+当前实现从 K8s Secret 读取 YAML：
+
+- namespace：`kubespark`
+- name：`kubespark-drone-yaml-secret`
+
+按 owner/repo 匹配 key，优先级：
+
+1. `owner__repo`
+2. `owner_repo`
+3. `owner-repo`
+4. `owner.repo`
+5. `repo`
+
+命中后返回 YAML；未命中返回 `204`（Drone 回退仓库 `.drone.yml`）。
+
+## 4. YAML 扩展响应协议
+
+Drone 请求头通常为：
+
+- `Accept: application/vnd.drone.config.v1+json`
+
+后端响应策略：
+
+- `Accept` 包含 `json`：返回 `application/json`，格式 `{"data":"<yaml>"}`。
+- 其他：返回 `text/plain` 原始 YAML。
+
+## 5. GVR 参数约定
+
+### 5.1 repos
 
 - 列表：无必填参数
-- 创建：需要 `namespace` + 仓库名
-  - 仓库名可来自 `repo` 查询参数或 body `metadata.name`
+- 创建：需要 `namespace` + 仓库名（`repo` 查询参数或 body `metadata.name`）
 - 更新：需要 `namespace` + path `{name}`
 - 删除：需要 `namespace` + path `{name}`
 
-## 4.2 builds
+### 5.2 builds
 
 - 列表：需要 `namespace` + `repo`
 - 创建：需要 `namespace` + `repo`（body `spec` 透传给 Drone）
-- 更新：语义为“重启构建”，需要 `namespace` + `repo` + path `{name}`
-  - `{name}` 必须为构建号（正整数）
-- 删除：语义为“停止构建”，需要 `namespace` + `repo` + path `{name}`
-  - `{name}` 必须为构建号（正整数）
+- 更新（重启）：需要 `namespace` + `repo` + path `{name}`，`{name}` 为构建号
+- 删除（停止）：需要 `namespace` + `repo` + path `{name}`，`{name}` 为构建号
 
-## 5. 与 Drone 上游 API 对照
+## 6. 常见故障排查
 
-- `GET repos` -> `GET /api/user/repos`
-- `POST repos` -> `POST /api/repos/{namespace}/{name}`（激活仓库）
-- `PUT repos/{name}` -> `PATCH /api/repos/{namespace}/{name}`
-- `DELETE repos/{name}` -> `DELETE /api/repos/{namespace}/{name}`
-- `GET builds` -> `GET /api/repos/{namespace}/{repo}/builds`
-- `POST builds` -> `POST /api/repos/{namespace}/{repo}/builds`
-- `PUT builds/{name}` -> `POST /api/repos/{namespace}/{repo}/builds/{number}`（重启）
-- `DELETE builds/{name}` -> `DELETE /api/repos/{namespace}/{repo}/builds/{number}`（停止）
+### 6.1 `missing DRONE_YAML_SECRET`
 
-## 6. 错误处理约定
+含义：处理 `/drone/yaml` 的进程未配置该变量。  
+注意：变量必须配置到“实际运行该 HTTP 服务”的进程（容器或主机进程）。
 
-- 参数缺失或非法：返回 `400`
-- Drone 请求失败：返回 `502`
-- Drone 未配置：返回 `503`
+### 6.2 `invalid drone yaml signature`
 
-返回结构遵循现有 kapis 统一封装，不额外定义新格式。
+优先排查：
 
-## 7. 联调示例
+1. Drone 与 Kubespark 的 `DRONE_YAML_SECRET` 是否完全一致。
+2. 修改变量后是否重启了对应进程。
+3. 请求是否经过会改写签名相关头的代理。
+
+### 6.3 `406: Not Acceptable`
+
+通常是扩展响应协商不匹配。当前实现已兼容 Drone vendor accept（`application/vnd.drone.config.v1+json`）。
+
+### 6.4 `invalid character 'k' looking for beginning of value`
+
+含义：Drone 按 JSON 解析响应，但接口返回了纯文本 YAML。  
+当前实现已按 `Accept` 自动返回 JSON 包装。
+
+## 7. 调试示例
 
 ```bash
-# 查询仓库列表
-curl -X GET "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/repos" \
-  -H "Authorization: Bearer <token>"
+# 手工读取 YAML（调试）
+curl -i "http://localhost:8080/kapis/v1alpha1/drone/yaml?owner=tanqidi&repo=kubespark"
 
-# 激活仓库
-curl -X POST "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/repos?namespace=org" \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"metadata":{"name":"demo-repo"}}'
-
-# 查询构建列表
-curl -X GET "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/builds?namespace=org&repo=demo-repo" \
-  -H "Authorization: Bearer <token>"
-
-# 触发构建
-curl -X POST "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/builds?namespace=org&repo=demo-repo" \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"spec":{"branch":"main"}}'
-
-# 重启构建（构建号 12）
-curl -X PUT "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/builds/12?namespace=org&repo=demo-repo" \
-  -H "Authorization: Bearer <token>"
-
-# 停止构建（构建号 12）
-curl -X DELETE "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/builds/12?namespace=org&repo=demo-repo" \
-  -H "Authorization: Bearer <token>"
+# 通过 GVR 查询构建
+curl -X GET "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/builds?namespace=tanqidi&repo=kubespark" \
+  -H "Authorization: Bearer <kubespark-jwt>"
 ```
-

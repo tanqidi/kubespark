@@ -3,6 +3,7 @@ module kubespark
 go 1.21
 
 require (
+	github.com/99designs/httpsignatures-go v0.0.0-20170731043157-88528bf4ca7e
 	github.com/emicklei/go-restful-openapi/v2 v2.11.0
 	github.com/emicklei/go-restful/v3 v3.11.0
 	github.com/go-openapi/spec v0.20.9

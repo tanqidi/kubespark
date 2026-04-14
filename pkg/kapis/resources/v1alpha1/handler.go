@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"kubespark/pkg/models/resources"
 	"kubespark/pkg/simple/client/drone"
 
+	"github.com/99designs/httpsignatures-go"
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +42,7 @@ const (
 
 	droneYamlSecretNamespace = "kubespark"
 	droneYamlSecretName      = "kubespark-drone-yaml-secret"
+	envDroneYAMLSecret       = "DRONE_YAML_SECRET"
 )
 
 // NewHandler creates a new API handler
@@ -173,6 +176,23 @@ func (h *Handler) GetClusterInfo(req *restful.Request, resp *restful.Response) {
 // - 200 + raw yaml text when found.
 // - 204 when not found, so Drone can fallback to repository .drone.yml.
 func (h *Handler) GetDroneYaml(req *restful.Request, resp *restful.Response) {
+	if err := verifyDroneYAMLRequest(req.Request); err != nil {
+		log.Printf(
+			"[drone-yaml] unauthorized: err=%v method=%s uri=%s host=%s date=%s digest=%s signature=%s",
+			err,
+			req.Request.Method,
+			req.Request.RequestURI,
+			req.Request.Host,
+			req.Request.Header.Get("Date"),
+			req.Request.Header.Get("Digest"),
+			truncateLogString(req.Request.Header.Get("Signature"), 280),
+		)
+		resp.AddHeader("Content-Type", "text/plain; charset=utf-8")
+		resp.WriteHeader(http.StatusUnauthorized)
+		_, _ = resp.Write([]byte("invalid drone yaml signature"))
+		return
+	}
+
 	body, rawBody := readBodyAsMapLoose(req)
 	contentType := strings.TrimSpace(req.Request.Header.Get("Content-Type"))
 	accept := strings.TrimSpace(req.Request.Header.Get("Accept"))
@@ -216,6 +236,29 @@ func (h *Handler) GetDroneYaml(req *restful.Request, resp *restful.Response) {
 	resp.AddHeader("Content-Type", "text/plain; charset=utf-8")
 	resp.WriteHeader(http.StatusOK)
 	_, _ = resp.Write([]byte(yamlText))
+}
+
+func verifyDroneYAMLRequest(r *http.Request) error {
+	if r == nil {
+		return fmt.Errorf("nil request")
+	}
+	// Keep the secret bytes exactly as provided to match Drone's signer behavior.
+	secret := os.Getenv(envDroneYAMLSecret)
+	if secret == "" {
+		return fmt.Errorf("missing %s", envDroneYAMLSecret)
+	}
+	if strings.TrimSpace(r.Header.Get("Signature")) == "" {
+		return fmt.Errorf("missing Signature header")
+	}
+
+	signature, err := httpsignatures.FromRequest(r)
+	if err != nil {
+		return fmt.Errorf("read signature failed: %w", err)
+	}
+	if !signature.IsValid(secret, r) {
+		return fmt.Errorf("signature validation failed")
+	}
+	return nil
 }
 
 func readBodyAsMapLoose(req *restful.Request) (map[string]any, string) {
