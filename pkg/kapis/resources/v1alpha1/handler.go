@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/gorilla/websocket"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -34,6 +37,9 @@ type Handler struct {
 const (
 	pipelineRunSyncInterval = 8 * time.Second
 	pipelineRunSyncTimeout  = 20 * time.Second
+
+	droneYamlSecretNamespace = "kubespark"
+	droneYamlSecretName      = "kubespark-drone-yaml-secret"
 )
 
 // NewHandler creates a new API handler
@@ -160,6 +166,93 @@ func (h *Handler) GetClusterInfo(req *restful.Request, resp *restful.Response) {
 		return
 	}
 	kapis.WriteSuccess(resp, result)
+}
+
+// GetDroneYaml resolves drone pipeline yaml from kubernetes secret.
+// Protocol:
+// - 200 + raw yaml text when found.
+// - 204 when not found, so Drone can fallback to repository .drone.yml.
+func (h *Handler) GetDroneYaml(req *restful.Request, resp *restful.Response) {
+	body, rawBody := readBodyAsMapLoose(req)
+	contentType := strings.TrimSpace(req.Request.Header.Get("Content-Type"))
+	accept := strings.TrimSpace(req.Request.Header.Get("Accept"))
+	log.Printf(
+		"[drone-yaml] request: method=%s contentType=%s accept=%s query=%s body=%s",
+		req.Request.Method,
+		contentType,
+		accept,
+		req.Request.URL.RawQuery,
+		truncateLogString(rawBody, 600),
+	)
+
+	owner, repo := resolveDroneYamlRepo(req, body)
+	if owner == "" || repo == "" {
+		log.Printf("[drone-yaml] skip: unresolved owner/repo query=%s body=%s", req.Request.URL.RawQuery, truncateLogString(rawBody, 600))
+		resp.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(req.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	yamlText, matchedKey, err := h.readDroneYamlFromSecret(ctx, owner, repo)
+	if err != nil {
+		log.Printf("[drone-yaml] miss: owner=%s repo=%s err=%v", owner, repo, err)
+		resp.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	log.Printf("[drone-yaml] hit: owner=%s repo=%s key=%s bytes=%d", owner, repo, matchedKey, len(yamlText))
+	if acceptWantsJSON(accept) {
+		log.Printf("[drone-yaml] response: format=json")
+		resp.AddHeader("Content-Type", "application/json; charset=utf-8")
+		resp.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(resp).Encode(map[string]string{
+			"data": yamlText,
+		})
+		return
+	}
+	log.Printf("[drone-yaml] response: format=text")
+	resp.AddHeader("Content-Type", "text/plain; charset=utf-8")
+	resp.WriteHeader(http.StatusOK)
+	_, _ = resp.Write([]byte(yamlText))
+}
+
+func readBodyAsMapLoose(req *restful.Request) (map[string]any, string) {
+	payload := map[string]any{}
+	if req == nil || req.Request == nil || req.Request.Body == nil {
+		return payload, ""
+	}
+
+	data, err := io.ReadAll(req.Request.Body)
+	if err != nil {
+		return payload, ""
+	}
+	raw := strings.TrimSpace(string(data))
+	if raw == "" {
+		return payload, ""
+	}
+
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return map[string]any{}, raw
+	}
+	return payload, raw
+}
+
+func truncateLogString(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max] + "...(truncated)"
+}
+
+func acceptWantsJSON(accept string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(accept))
+	if normalized == "" {
+		return false
+	}
+	// Drone sends vendor media type like: application/vnd.drone.config.v1+json
+	return strings.Contains(normalized, "json")
 }
 
 // GetResourceByGVR lists resources by Group Version Resource
@@ -1256,6 +1349,124 @@ func readStringFromMap(m map[string]any, path ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func resolveDroneYamlRepo(req *restful.Request, body map[string]any) (string, string) {
+	owner := pickFirstNonEmpty(
+		req.QueryParameter("owner"),
+		req.QueryParameter("namespace"),
+		req.QueryParameter("repoNamespace"),
+		readStringFromMap(body, "repo", "namespace"),
+		readStringFromMap(body, "repo", "owner"),
+		readStringFromMap(body, "build", "namespace"),
+		readStringFromMap(body, "build", "author_login"),
+		readStringFromMap(body, "build", "sender"),
+		readStringFromMap(body, "build", "trigger"),
+	)
+	repo := pickFirstNonEmpty(
+		req.QueryParameter("repo"),
+		readStringFromMap(body, "repo", "name"),
+		readStringFromMap(body, "build", "repo"),
+	)
+
+	if owner == "" || repo == "" {
+		slug := pickFirstNonEmpty(
+			req.QueryParameter("slug"),
+			readStringFromMap(body, "repo", "slug"),
+			readStringFromMap(body, "build", "repo"),
+		)
+		if strings.Contains(slug, "/") {
+			parts := strings.SplitN(slug, "/", 2)
+			if owner == "" {
+				owner = strings.TrimSpace(parts[0])
+			}
+			if repo == "" {
+				repo = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+
+	return strings.TrimSpace(owner), strings.TrimSpace(repo)
+}
+
+func (h *Handler) readDroneYamlFromSecret(ctx context.Context, owner, repo string) (string, string, error) {
+	resource, err := h.resourcesOperator.GetResource(ctx, droneYamlSecretNamespace, "secrets", droneYamlSecretName, metav1.GetOptions{})
+	if err != nil {
+		return "", "", fmt.Errorf("load secret failed: %w", err)
+	}
+
+	secret, ok := resource.(*corev1.Secret)
+	if !ok || secret == nil {
+		return "", "", fmt.Errorf("unexpected secret type: %T", resource)
+	}
+	if len(secret.Data) == 0 {
+		return "", "", fmt.Errorf("secret data is empty")
+	}
+
+	for _, key := range buildDroneYamlCandidateKeys(owner, repo) {
+		value, exists := secret.Data[key]
+		if !exists {
+			continue
+		}
+		text := strings.TrimSpace(string(value))
+		if text == "" {
+			return "", "", fmt.Errorf("key exists but empty: %s", key)
+		}
+		return text, key, nil
+	}
+
+	availableKeys := make([]string, 0, len(secret.Data))
+	for key := range secret.Data {
+		availableKeys = append(availableKeys, key)
+	}
+	slices.Sort(availableKeys)
+	if len(availableKeys) > 12 {
+		availableKeys = availableKeys[:12]
+	}
+	return "", "", fmt.Errorf("no matched key, tried=%v available=%v", buildDroneYamlCandidateKeys(owner, repo), availableKeys)
+}
+
+var secretKeyCleaner = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+
+func sanitizeSecretKey(value string) string {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" {
+		return ""
+	}
+	return strings.Trim(secretKeyCleaner.ReplaceAllString(normalized, "-"), "-")
+}
+
+func buildDroneYamlCandidateKeys(owner, repo string) []string {
+	owner = sanitizeSecretKey(owner)
+	repo = sanitizeSecretKey(repo)
+	if owner == "" || repo == "" {
+		if repo == "" {
+			return nil
+		}
+		return []string{repo}
+	}
+
+	candidates := []string{
+		owner + "__" + repo,
+		owner + "_" + repo,
+		owner + "-" + repo,
+		owner + "." + repo,
+		repo,
+	}
+
+	dedup := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, key := range candidates {
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		dedup = append(dedup, key)
+	}
+	return dedup
 }
 
 func (h *Handler) resolveDroneRepo(namespace string, req *restful.Request, body map[string]any) (string, string, error) {

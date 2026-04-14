@@ -31,6 +31,12 @@ func AuthFilter(req *restful.Request, resp *restful.Response, chain *restful.Fil
 		return
 	}
 
+	// Allow Drone YAML extension endpoint (Drone server cannot provide Kubespark JWT).
+	if strings.HasPrefix(path, "/kapis/v1alpha1/drone/yaml") {
+		chain.ProcessFilter(req, resp)
+		return
+	}
+
 	// Extract token from Authorization header
 	authHeader := req.HeaderParameter("Authorization")
 	if authHeader == "" {
