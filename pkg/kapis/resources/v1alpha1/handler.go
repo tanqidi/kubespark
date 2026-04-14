@@ -31,12 +31,21 @@ type Handler struct {
 	droneClient       *drone.Client
 }
 
+const (
+	pipelineRunSyncInterval = 8 * time.Second
+	pipelineRunSyncTimeout  = 20 * time.Second
+)
+
 // NewHandler creates a new API handler
 func NewHandler(resourcesOperator resources.Interface) *Handler {
-	return &Handler{
+	handler := &Handler{
 		resourcesOperator: resourcesOperator,
 		droneClient:       drone.NewClientFromEnv(),
 	}
+	if handler.droneClient != nil {
+		handler.startPipelineRunDroneSyncer()
+	}
+	return handler
 }
 
 // ListPods lists all pods
@@ -771,7 +780,7 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 	}
 
 	log.Printf("[pipeline-run] trigger build success: run=%s pipeline=%s namespace=%s repo=%s result=%v", runName, pipelineName, repoNamespace, repoName, result)
-	if err := h.updatePipelineRunDroneAnnotations(createdObj, result, repoNamespace, repoName); err != nil {
+	if err := h.updatePipelineRunDroneAnnotations(createdObj, result); err != nil {
 		log.Printf("[pipeline-run] update drone annotation failed: run=%s err=%v", runName, err)
 	}
 }
@@ -779,8 +788,6 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 func (h *Handler) updatePipelineRunDroneAnnotations(
 	runObj *unstructured.Unstructured,
 	buildResult any,
-	repoNamespace,
-	repoName string,
 ) error {
 	if runObj == nil {
 		return fmt.Errorf("pipeline run object is nil")
@@ -798,20 +805,11 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 		}
 
 		annotations["tanqidi.com/drone"] = string(payloadBytes)
-		annotations["tanqidi.com/drone-namespace"] = strings.TrimSpace(repoNamespace)
-		annotations["tanqidi.com/drone-repo"] = strings.TrimSpace(repoName)
-
-		if obj, ok := buildResult.(map[string]any); ok {
-			if number, ok := obj["number"]; ok {
-				annotations["tanqidi.com/drone-build-number"] = strings.TrimSpace(fmt.Sprintf("%v", number))
-			}
-			if link, ok := obj["link"].(string); ok {
-				annotations["tanqidi.com/drone-build-link"] = strings.TrimSpace(link)
-			}
-			if status, ok := obj["status"].(string); ok {
-				annotations["tanqidi.com/drone-build-status"] = strings.TrimSpace(status)
-			}
-		}
+		delete(annotations, "tanqidi.com/drone-namespace")
+		delete(annotations, "tanqidi.com/drone-repo")
+		delete(annotations, "tanqidi.com/drone-build-number")
+		delete(annotations, "tanqidi.com/drone-build-link")
+		delete(annotations, "tanqidi.com/drone-build-status")
 
 		target.SetAnnotations(annotations)
 	}
@@ -864,6 +862,246 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 
 	log.Printf("[pipeline-run] updated drone annotation after retry: run=%s", name)
 	return nil
+}
+
+func (h *Handler) startPipelineRunDroneSyncer() {
+	go func() {
+		ticker := time.NewTicker(pipelineRunSyncInterval)
+		defer ticker.Stop()
+		log.Printf("[pipeline-run-sync] started: interval=%s", pipelineRunSyncInterval)
+
+		for {
+			h.syncPendingPipelineRuns()
+			<-ticker.C
+		}
+	}()
+}
+
+func (h *Handler) syncPendingPipelineRuns() {
+	if h.droneClient == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), pipelineRunSyncTimeout)
+	defer cancel()
+
+	pipelineRunGVR := schema.GroupVersionResource{
+		Group:    "tanqidi.com",
+		Version:  "v1alpha1",
+		Resource: "pipelineruns",
+	}
+
+	result, err := h.resourcesOperator.ListResourcesByGVR(ctx, pipelineRunGVR, metav1.NamespaceAll, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("[pipeline-run-sync] scan failed: err=%v", err)
+		return
+	}
+
+	list, ok := result.(*unstructured.UnstructuredList)
+	if !ok {
+		log.Printf("[pipeline-run-sync] scan skipped: unexpected list type=%T", result)
+		return
+	}
+
+	var (
+		total        = len(list.Items)
+		missingAnno  int
+		parseFail    int
+		terminal     int
+		missingBuild int
+		missingRepo  int
+		unchanged    int
+		updated      int
+		failed       int
+	)
+
+	for i := range list.Items {
+		runObj := list.Items[i].DeepCopy()
+		runName := strings.TrimSpace(runObj.GetName())
+
+		dronePayload := strings.TrimSpace(runObj.GetAnnotations()["tanqidi.com/drone"])
+		if dronePayload == "" {
+			missingAnno++
+			continue
+		}
+
+		currentBuild, err := parseDroneBuildPayload(dronePayload)
+		if err != nil {
+			parseFail++
+			log.Printf("[pipeline-run-sync] parse annotation failed: run=%s err=%v", runName, err)
+			continue
+		}
+
+		currentStatus := normalizeBuildStatus(getMapString(currentBuild, "status"))
+		if isTerminalBuildStatus(currentStatus) {
+			terminal++
+			continue
+		}
+
+		buildNumber, ok := getMapInt64(currentBuild, "number")
+		if !ok || buildNumber <= 0 {
+			missingBuild++
+			log.Printf("[pipeline-run-sync] skip: missing build number run=%s status=%s", runName, currentStatus)
+			continue
+		}
+
+		repoNamespace, repoName := h.resolvePipelineRunDroneRepo(runObj)
+		if repoNamespace == "" || repoName == "" {
+			missingRepo++
+			log.Printf("[pipeline-run-sync] skip: namespace/repo unresolved run=%s", runName)
+			continue
+		}
+
+		buildCtx, buildCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		latestBuildAny, err := h.droneClient.GetBuild(buildCtx, repoNamespace, repoName, buildNumber)
+		buildCancel()
+		if err != nil {
+			failed++
+			log.Printf("[pipeline-run-sync] get build failed: run=%s namespace=%s repo=%s build=%d err=%v", runName, repoNamespace, repoName, buildNumber, err)
+			continue
+		}
+
+		latestBuild, ok := latestBuildAny.(map[string]any)
+		if !ok {
+			failed++
+			log.Printf("[pipeline-run-sync] unexpected build payload: run=%s type=%T", runName, latestBuildAny)
+			continue
+		}
+
+		latestStatus := normalizeBuildStatus(getMapString(latestBuild, "status"))
+		if currentStatus == latestStatus && getMapInt64OrZero(currentBuild, "updated") == getMapInt64OrZero(latestBuild, "updated") {
+			unchanged++
+			continue
+		}
+
+		if err := h.updatePipelineRunDroneAnnotations(runObj, latestBuild); err != nil {
+			failed++
+			log.Printf("[pipeline-run-sync] update annotation failed: run=%s namespace=%s repo=%s build=%d err=%v", runName, repoNamespace, repoName, buildNumber, err)
+			continue
+		}
+
+		updated++
+		log.Printf("[pipeline-run-sync] updated: run=%s namespace=%s repo=%s build=%d status=%s->%s", runName, repoNamespace, repoName, buildNumber, currentStatus, latestStatus)
+	}
+
+	log.Printf(
+		"[pipeline-run-sync] scan done: total=%d missingAnno=%d parseFail=%d terminal=%d missingBuild=%d missingRepo=%d unchanged=%d updated=%d failed=%d",
+		total,
+		missingAnno,
+		parseFail,
+		terminal,
+		missingBuild,
+		missingRepo,
+		unchanged,
+		updated,
+		failed,
+	)
+}
+
+func parseDroneBuildPayload(raw string) (map[string]any, error) {
+	payload := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func normalizeBuildStatus(status string) string {
+	return strings.ToLower(strings.TrimSpace(status))
+}
+
+func isTerminalBuildStatus(status string) bool {
+	switch normalizeBuildStatus(status) {
+	case "success", "failure", "error", "killed":
+		return true
+	default:
+		return false
+	}
+}
+
+func getMapString(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, ok := m[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func getMapInt64(m map[string]any, key string) (int64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	value, ok := m[key]
+	if !ok || value == nil {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int32:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	default:
+		return 0, false
+	}
+}
+
+func getMapInt64OrZero(m map[string]any, key string) int64 {
+	value, ok := getMapInt64(m, key)
+	if !ok {
+		return 0
+	}
+	return value
+}
+
+func (h *Handler) resolvePipelineRunDroneRepo(runObj *unstructured.Unstructured) (string, string) {
+	if runObj == nil {
+		return "", ""
+	}
+
+	runData, _, _ := unstructured.NestedStringMap(runObj.Object, "spec", "data")
+	pipelineName, _, _ := unstructured.NestedString(runObj.Object, "spec", "pipelineRef", "name")
+	pipelineName = strings.TrimSpace(pipelineName)
+
+	pipelineData := map[string]string{}
+	if pipelineName != "" {
+		pipelineData = h.loadPipelineData(pipelineName)
+	}
+	merged := mergeStringMaps(pipelineData, runData)
+
+	repoNamespace := pickFirstNonEmpty(
+		merged["droneNamespace"],
+		merged["namespace"],
+		merged["repoNamespace"],
+	)
+	repoName := pickFirstNonEmpty(
+		merged["droneRepo"],
+		merged["repo"],
+		pipelineName,
+	)
+	return repoNamespace, repoName
 }
 
 func (h *Handler) ensurePipelineRepoActive(namespace, repo string) error {

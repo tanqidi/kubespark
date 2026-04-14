@@ -232,6 +232,16 @@ func (c *Client) ListBuilds(ctx context.Context, namespace, repo string) (any, e
 	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, nil)
 }
 
+func (c *Client) GetBuild(ctx context.Context, namespace, repo string, buildNumber int64) (any, error) {
+	return c.request(
+		ctx,
+		http.MethodGet,
+		"/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds/"+strconv.FormatInt(buildNumber, 10),
+		nil,
+		nil,
+	)
+}
+
 func (c *Client) CreateBuild(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
 	return c.request(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, body)
 }
