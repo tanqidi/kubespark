@@ -771,6 +771,99 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 	}
 
 	log.Printf("[pipeline-run] trigger build success: run=%s pipeline=%s namespace=%s repo=%s result=%v", runName, pipelineName, repoNamespace, repoName, result)
+	if err := h.updatePipelineRunDroneAnnotations(createdObj, result, repoNamespace, repoName); err != nil {
+		log.Printf("[pipeline-run] update drone annotation failed: run=%s err=%v", runName, err)
+	}
+}
+
+func (h *Handler) updatePipelineRunDroneAnnotations(
+	runObj *unstructured.Unstructured,
+	buildResult any,
+	repoNamespace,
+	repoName string,
+) error {
+	if runObj == nil {
+		return fmt.Errorf("pipeline run object is nil")
+	}
+
+	payloadBytes, err := json.Marshal(buildResult)
+	if err != nil {
+		return fmt.Errorf("marshal drone result failed: %w", err)
+	}
+
+	applyAnnotations := func(target *unstructured.Unstructured) {
+		annotations := target.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+
+		annotations["tanqidi.com/drone"] = string(payloadBytes)
+		annotations["tanqidi.com/drone-namespace"] = strings.TrimSpace(repoNamespace)
+		annotations["tanqidi.com/drone-repo"] = strings.TrimSpace(repoName)
+
+		if obj, ok := buildResult.(map[string]any); ok {
+			if number, ok := obj["number"]; ok {
+				annotations["tanqidi.com/drone-build-number"] = strings.TrimSpace(fmt.Sprintf("%v", number))
+			}
+			if link, ok := obj["link"].(string); ok {
+				annotations["tanqidi.com/drone-build-link"] = strings.TrimSpace(link)
+			}
+			if status, ok := obj["status"].(string); ok {
+				annotations["tanqidi.com/drone-build-status"] = strings.TrimSpace(status)
+			}
+		}
+
+		target.SetAnnotations(annotations)
+	}
+
+	pipelineRunGVR := schema.GroupVersionResource{
+		Group:    "tanqidi.com",
+		Version:  "v1alpha1",
+		Resource: "pipelineruns",
+	}
+	namespace := strings.TrimSpace(runObj.GetNamespace())
+
+	applyAnnotations(runObj)
+	if _, err := h.resourcesOperator.UpdateResourceByGVR(
+		context.Background(),
+		pipelineRunGVR,
+		namespace,
+		runObj,
+		metav1.UpdateOptions{},
+	); err == nil {
+		log.Printf("[pipeline-run] updated drone annotation: run=%s", strings.TrimSpace(runObj.GetName()))
+		return nil
+	} else if !errors.IsConflict(err) {
+		return err
+	}
+
+	// Retry once on conflict by reloading latest object.
+	name := strings.TrimSpace(runObj.GetName())
+	result, err := h.resourcesOperator.ListResourcesByGVR(context.Background(), pipelineRunGVR, namespace, metav1.ListOptions{
+		FieldSelector: "metadata.name=" + name,
+	})
+	if err != nil {
+		return fmt.Errorf("reload run on conflict failed: %w", err)
+	}
+	list, ok := result.(*unstructured.UnstructuredList)
+	if !ok || len(list.Items) == 0 {
+		return fmt.Errorf("reload run on conflict returned empty")
+	}
+	latest := list.Items[0].DeepCopy()
+	applyAnnotations(latest)
+	_, err = h.resourcesOperator.UpdateResourceByGVR(
+		context.Background(),
+		pipelineRunGVR,
+		namespace,
+		latest,
+		metav1.UpdateOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("update after conflict failed: %w", err)
+	}
+
+	log.Printf("[pipeline-run] updated drone annotation after retry: run=%s", name)
+	return nil
 }
 
 func (h *Handler) ensurePipelineRepoActive(namespace, repo string) error {
