@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -42,14 +41,13 @@ const (
 
 	droneYamlSecretNamespace = "kubespark"
 	droneYamlSecretName      = "kubespark-drone-yaml-secret"
-	envDroneYAMLSecret       = "DRONE_YAML_SECRET"
 )
 
 // NewHandler creates a new API handler
 func NewHandler(resourcesOperator resources.Interface) *Handler {
 	handler := &Handler{
 		resourcesOperator: resourcesOperator,
-		droneClient:       drone.NewClientFromEnv(),
+		droneClient:       drone.NewClientFromSecret(),
 	}
 	if handler.droneClient != nil {
 		handler.startPipelineRunDroneSyncer()
@@ -242,10 +240,14 @@ func verifyDroneYAMLRequest(r *http.Request) error {
 	if r == nil {
 		return fmt.Errorf("nil request")
 	}
-	// Keep the secret bytes exactly as provided to match Drone's signer behavior.
-	secret := os.Getenv(envDroneYAMLSecret)
-	if secret == "" {
-		return fmt.Errorf("missing %s", envDroneYAMLSecret)
+	// Keep the secret bytes exactly as provided in kubespark/kubespark-secret
+	// to match Drone's signer behavior.
+	secret, err := drone.ReadDroneYAMLSecret()
+	if err != nil || secret == "" {
+		if err != nil {
+			return fmt.Errorf("read DRONE_YAML_SECRET from secret failed: %w", err)
+		}
+		return fmt.Errorf("missing DRONE_YAML_SECRET in secret")
 	}
 	if strings.TrimSpace(r.Header.Get("Signature")) == "" {
 		return fmt.Errorf("missing Signature header")
@@ -1359,7 +1361,7 @@ func (h *Handler) ensureDroneConfigured(resp *restful.Response) bool {
 		resp,
 		http.StatusServiceUnavailable,
 		http.StatusServiceUnavailable,
-		"drone integration is not configured, please set DRONE_SERVER/DRONE_TOKEN or provide secret drone-secret with DRONE_SERVER_HOST and DRONE_RPC_SECRET",
+		"drone integration is not configured, please configure DRONE_SERVER/DRONE_TOKEN in secret kubespark/kubespark-secret",
 	)
 	return false
 }

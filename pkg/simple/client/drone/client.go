@@ -9,8 +9,6 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,20 +19,12 @@ import (
 )
 
 const (
-	envDroneServer          = "DRONE_SERVER"
-	envDroneToken           = "DRONE_TOKEN"
-	envDroneSecretNamespace = "DRONE_SECRET_NAMESPACE"
-	envDroneSecretName      = "DRONE_SECRET_NAME"
-	envPodNamespace         = "POD_NAMESPACE"
+	FixedDroneSecretName      = "kubespark-secret"
+	FixedDroneSecretNamespace = "kubespark"
 
-	defaultDroneSecretName      = "drone-secret"
-	defaultDroneSecretNamespace = "kubespark"
-
-	secretKeyDroneServer      = "DRONE_SERVER"
-	secretKeyDroneServerHost  = "DRONE_SERVER_HOST"
-	secretKeyDroneServerProto = "DRONE_SERVER_PROTO"
-	secretKeyDroneToken       = "DRONE_TOKEN"
-	secretKeyDroneRPCSecret   = "DRONE_RPC_SECRET"
+	secretKeyDroneServer     = "DRONE_SERVER"
+	secretKeyDroneToken      = "DRONE_TOKEN"
+	secretKeyDroneYAMLSecret = "DRONE_YAML_SECRET"
 )
 
 type Client struct {
@@ -43,19 +33,13 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func NewClientFromEnv() *Client {
-	baseURL := normalizeBaseURL(strings.TrimSpace(os.Getenv(envDroneServer)))
-	token := strings.TrimSpace(os.Getenv(envDroneToken))
+func NewClientFromSecret() *Client {
+	baseURL, token := readConfigFromSecret()
 	if baseURL == "" || token == "" {
-		baseURL, token = readConfigFromSecret()
-		if baseURL == "" || token == "" {
-			log.Printf("[drone] client not configured: missing DRONE_SERVER/DRONE_TOKEN and secret fallback")
-			return nil
-		}
-		log.Printf("[drone] client initialized from secret, server=%s", baseURL)
-	} else {
-		log.Printf("[drone] client initialized from env, server=%s", baseURL)
+		log.Printf("[drone] client not configured: missing DRONE_SERVER/DRONE_TOKEN in secret %s/%s", FixedDroneSecretNamespace, FixedDroneSecretName)
+		return nil
 	}
+	log.Printf("[drone] client initialized from secret %s/%s, server=%s", FixedDroneSecretNamespace, FixedDroneSecretName, baseURL)
 
 	return newClient(baseURL, token)
 }
@@ -82,31 +66,13 @@ func normalizeBaseURL(raw string) string {
 }
 
 func readConfigFromSecret() (string, string) {
-	secretName := strings.TrimSpace(os.Getenv(envDroneSecretName))
-	if secretName == "" {
-		secretName = defaultDroneSecretName
-	}
-
-	secretNamespace := resolveSecretNamespace()
-	if secretNamespace == "" {
-		secretNamespace = defaultDroneSecretNamespace
-	}
-
-	k8sClient, err := k8s.NewClient()
-	if err != nil {
-		return "", ""
-	}
-
-	secret, err := k8sClient.Kubernetes().CoreV1().Secrets(secretNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	secretData, err := readDroneSecretData()
 	if err != nil {
 		return "", ""
 	}
 
 	readSecretValue := func(key string) string {
-		if secret == nil || secret.Data == nil {
-			return ""
-		}
-		value, ok := secret.Data[key]
+		value, ok := secretData[key]
 		if !ok {
 			return ""
 		}
@@ -114,39 +80,45 @@ func readConfigFromSecret() (string, string) {
 	}
 
 	baseURL := normalizeBaseURL(readSecretValue(secretKeyDroneServer))
-	if baseURL == "" {
-		host := readSecretValue(secretKeyDroneServerHost)
-		proto := readSecretValue(secretKeyDroneServerProto)
-		if proto == "" {
-			proto = "http"
-		}
-		if host != "" {
-			baseURL = normalizeBaseURL(proto + "://" + host)
-		}
-	}
-
 	token := readSecretValue(secretKeyDroneToken)
-	if token == "" {
-		token = readSecretValue(secretKeyDroneRPCSecret)
-	}
 
 	return baseURL, token
 }
 
-func resolveSecretNamespace() string {
-	if value := strings.TrimSpace(os.Getenv(envDroneSecretNamespace)); value != "" {
-		return value
+func ReadDroneYAMLSecret() (string, error) {
+	value, err := readDroneSecretValueRaw(secretKeyDroneYAMLSecret)
+	if err != nil {
+		return "", err
 	}
-	if value := strings.TrimSpace(os.Getenv(envPodNamespace)); value != "" {
-		return value
+	return value, nil
+}
+
+func readDroneSecretValueRaw(key string) (string, error) {
+	secretData, err := readDroneSecretData()
+	if err != nil {
+		return "", err
+	}
+	value, ok := secretData[key]
+	if !ok {
+		return "", fmt.Errorf("key %s not found in secret %s/%s", key, FixedDroneSecretNamespace, FixedDroneSecretName)
+	}
+	return string(value), nil
+}
+
+func readDroneSecretData() (map[string][]byte, error) {
+	k8sClient, err := k8s.NewClient()
+	if err != nil {
+		return nil, err
 	}
 
-	namespaceFile := filepath.Join(string(filepath.Separator), "var", "run", "secrets", "kubernetes.io", "serviceaccount", "namespace")
-	data, err := os.ReadFile(namespaceFile)
+	secret, err := k8sClient.Kubernetes().CoreV1().Secrets(FixedDroneSecretNamespace).Get(context.Background(), FixedDroneSecretName, metav1.GetOptions{})
 	if err != nil {
-		return ""
+		return nil, err
 	}
-	return strings.TrimSpace(string(data))
+	if secret == nil || secret.Data == nil {
+		return nil, fmt.Errorf("secret %s/%s has no data", FixedDroneSecretNamespace, FixedDroneSecretName)
+	}
+	return secret.Data, nil
 }
 
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any) (any, error) {
