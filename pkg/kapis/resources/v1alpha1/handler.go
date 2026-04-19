@@ -35,7 +35,6 @@ const (
 	pipelineRunSyncInterval = 8 * time.Second
 	pipelineRunSyncTimeout  = 20 * time.Second
 	droneYamlAnnotationKey  = "tanqidi.com/drone-yaml"
-	dronePipelineRunParam   = "kubespark_pipeline_run"
 )
 
 // NewHandler creates a new API handler
@@ -765,20 +764,6 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 			buildSpec[key] = v
 		}
 	}
-	buildParams := map[string]any{}
-	switch params := buildSpec["params"].(type) {
-	case map[string]any:
-		buildParams = params
-	case map[string]string:
-		for k, v := range params {
-			buildParams[k] = v
-		}
-	}
-	buildParams[dronePipelineRunParam] = runName
-	buildSpec["params"] = buildParams
-	buildSpec["inputs"] = buildParams
-	buildSpec["action"] = runName
-
 	if err := h.ensurePipelineRepoActive(repoNamespace, repoName); err != nil {
 		log.Printf("[pipeline-run] ensure repo active failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
 		return
@@ -820,11 +805,6 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 		}
 
 		annotations["tanqidi.com/drone"] = string(payloadBytes)
-		delete(annotations, "tanqidi.com/drone-namespace")
-		delete(annotations, "tanqidi.com/drone-repo")
-		delete(annotations, "tanqidi.com/drone-build-number")
-		delete(annotations, "tanqidi.com/drone-build-link")
-		delete(annotations, "tanqidi.com/drone-build-status")
 
 		target.SetAnnotations(annotations)
 	}

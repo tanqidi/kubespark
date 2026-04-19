@@ -196,14 +196,6 @@ func (c *Client) ActivateRepo(ctx context.Context, namespace, name string) (any,
 	return c.request(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(name), nil, nil)
 }
 
-func (c *Client) UpdateRepo(ctx context.Context, namespace, name string, body map[string]any) (any, error) {
-	return c.request(ctx, http.MethodPatch, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(name), nil, body)
-}
-
-func (c *Client) DeleteRepo(ctx context.Context, namespace, name string) (any, error) {
-	return c.request(ctx, http.MethodDelete, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(name), nil, nil)
-}
-
 func (c *Client) ListBuilds(ctx context.Context, namespace, repo string) (any, error) {
 	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, nil)
 }
@@ -232,16 +224,6 @@ func (c *Client) CreateSecret(ctx context.Context, namespace, repo string, body 
 	)
 }
 
-func (c *Client) UpdateSecret(ctx context.Context, namespace, repo, secretName string, body map[string]any) (any, error) {
-	return c.request(
-		ctx,
-		http.MethodPatch,
-		"/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets/"+url.PathEscape(secretName),
-		nil,
-		body,
-	)
-}
-
 func (c *Client) GetBuild(ctx context.Context, namespace, repo string, buildNumber int64) (any, error) {
 	return c.request(
 		ctx,
@@ -254,12 +236,4 @@ func (c *Client) GetBuild(ctx context.Context, namespace, repo string, buildNumb
 
 func (c *Client) CreateBuild(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
 	return c.request(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, body)
-}
-
-func (c *Client) RestartBuild(ctx context.Context, namespace, repo string, buildNumber int64) (any, error) {
-	return c.request(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds/"+strconv.FormatInt(buildNumber, 10), nil, nil)
-}
-
-func (c *Client) StopBuild(ctx context.Context, namespace, repo string, buildNumber int64) (any, error) {
-	return c.request(ctx, http.MethodDelete, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds/"+strconv.FormatInt(buildNumber, 10), nil, nil)
 }
