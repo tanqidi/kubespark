@@ -36,8 +36,7 @@ const (
 	pipelineRunSyncInterval = 8 * time.Second
 	pipelineRunSyncTimeout  = 20 * time.Second
 	droneYamlAnnotationKey  = "tanqidi.com/drone-yaml"
-	droneBuildIDAnnotation  = "tanqidi.com/drone-build-id"
-	droneRepoIDAnnotation   = "tanqidi.com/drone-repo-id"
+	dronePipelineRunParam   = "kubespark_pipeline_run"
 )
 
 // NewHandler creates a new API handler
@@ -898,6 +897,19 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 			buildSpec[key] = v
 		}
 	}
+	buildParams := map[string]any{}
+	switch params := buildSpec["params"].(type) {
+	case map[string]any:
+		buildParams = params
+	case map[string]string:
+		for k, v := range params {
+			buildParams[k] = v
+		}
+	}
+	buildParams[dronePipelineRunParam] = runName
+	buildSpec["params"] = buildParams
+	buildSpec["inputs"] = buildParams
+	buildSpec["action"] = runName
 
 	if err := h.ensurePipelineRepoActive(repoNamespace, repoName); err != nil {
 		log.Printf("[pipeline-run] ensure repo active failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
@@ -932,9 +944,6 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 	if err != nil {
 		return fmt.Errorf("marshal drone result failed: %w", err)
 	}
-	buildPayload, _ := buildResult.(map[string]any)
-	buildID := getMapInt64OrZero(buildPayload, "id")
-	repoID := getMapInt64OrZero(buildPayload, "repo_id")
 
 	applyAnnotations := func(target *unstructured.Unstructured) {
 		annotations := target.GetAnnotations()
@@ -943,16 +952,6 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 		}
 
 		annotations["tanqidi.com/drone"] = string(payloadBytes)
-		if buildID > 0 {
-			annotations[droneBuildIDAnnotation] = strconv.FormatInt(buildID, 10)
-		} else {
-			delete(annotations, droneBuildIDAnnotation)
-		}
-		if repoID > 0 {
-			annotations[droneRepoIDAnnotation] = strconv.FormatInt(repoID, 10)
-		} else {
-			delete(annotations, droneRepoIDAnnotation)
-		}
 		delete(annotations, "tanqidi.com/drone-namespace")
 		delete(annotations, "tanqidi.com/drone-repo")
 		delete(annotations, "tanqidi.com/drone-build-number")
@@ -1406,41 +1405,41 @@ func readStringFromMap(m map[string]any, path ...string) string {
 	return strings.TrimSpace(value)
 }
 
-func readInt64FromMap(m map[string]any, path ...string) int64 {
+func readInt64FromMap(m map[string]any, path ...string) (int64, bool) {
 	var current any = m
 	for _, key := range path {
 		obj, ok := current.(map[string]any)
 		if !ok {
-			return 0
+			return 0, false
 		}
 		current, ok = obj[key]
 		if !ok {
-			return 0
+			return 0, false
 		}
 	}
 	switch value := current.(type) {
 	case int:
-		return int64(value)
+		return int64(value), true
 	case int32:
-		return int64(value)
+		return int64(value), true
 	case int64:
-		return value
+		return value, true
 	case float64:
-		return int64(value)
+		return int64(value), true
 	case json.Number:
 		n, err := value.Int64()
 		if err != nil {
-			return 0
+			return 0, false
 		}
-		return n
+		return n, true
 	case string:
 		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 		if err != nil {
-			return 0
+			return 0, false
 		}
-		return n
+		return n, true
 	default:
-		return 0
+		return 0, false
 	}
 }
 
@@ -1484,8 +1483,8 @@ func resolveDroneYamlRepo(req *restful.Request, body map[string]any) (string, st
 
 func (h *Handler) readDroneYamlFromPipelineRunAnnotations(
 	ctx context.Context,
-	_,
-	_ string,
+	owner,
+	repo string,
 	body map[string]any,
 ) (string, string, string, error) {
 	pipelineRunGVR := schema.GroupVersionResource{
@@ -1504,11 +1503,21 @@ func (h *Handler) readDroneYamlFromPipelineRunAnnotations(
 		return "", "", "", fmt.Errorf("unexpected pipelineruns list type: %T", result)
 	}
 
-	targetBuildID := readInt64FromMap(body, "build", "id")
-	targetRepoID := readInt64FromMap(body, "build", "repo_id")
-	if targetBuildID <= 0 || targetRepoID <= 0 {
-		return "", "", "", fmt.Errorf("missing build.id or build.repo_id")
+	targetOwner := strings.TrimSpace(owner)
+	targetRepo := strings.TrimSpace(repo)
+	if targetOwner == "" || targetRepo == "" {
+		return "", "", "", fmt.Errorf("missing owner/repo")
 	}
+	targetRepoID, hasRepoID := readInt64FromMap(body, "build", "repo_id")
+	if !hasRepoID || targetRepoID <= 0 {
+		return "", "", "", fmt.Errorf("missing build.repo_id")
+	}
+
+	var (
+		bestRunName string
+		bestYaml    string
+		bestTime    time.Time
+	)
 
 	for i := range list.Items {
 		item := &list.Items[i]
@@ -1516,25 +1525,39 @@ func (h *Handler) readDroneYamlFromPipelineRunAnnotations(
 		if annotations == nil {
 			continue
 		}
-		runBuildID, err := strconv.ParseInt(strings.TrimSpace(annotations[droneBuildIDAnnotation]), 10, 64)
-		if err != nil || runBuildID <= 0 {
-			continue
-		}
-		runRepoID, err := strconv.ParseInt(strings.TrimSpace(annotations[droneRepoIDAnnotation]), 10, 64)
-		if err != nil || runRepoID <= 0 {
-			continue
-		}
-		if runBuildID != targetBuildID || runRepoID != targetRepoID {
-			continue
-		}
 		droneYaml := strings.TrimSpace(annotations[droneYamlAnnotationKey])
 		if droneYaml == "" {
 			continue
 		}
-		return droneYaml, strings.TrimSpace(item.GetName()), "build-id+repo-id", nil
+		// Only consider runs that haven't been bound to a Drone build yet.
+		if strings.TrimSpace(annotations["tanqidi.com/drone"]) != "" {
+			continue
+		}
+
+		data, _, _ := unstructured.NestedStringMap(item.Object, "spec", "data")
+		runOwner := pickFirstNonEmpty(data["namespace"], data["droneNamespace"], data["repoNamespace"])
+		runRepo := pickFirstNonEmpty(data["repo"], data["droneRepo"])
+		if runOwner != targetOwner || runRepo != targetRepo {
+			continue
+		}
+
+		createdAt := item.GetCreationTimestamp().Time
+		if bestRunName == "" || createdAt.After(bestTime) {
+			bestRunName = strings.TrimSpace(item.GetName())
+			bestYaml = droneYaml
+			bestTime = createdAt
+		}
 	}
 
-	return "", "", "", fmt.Errorf("no matched pipelinerun annotation for build.id=%d repo_id=%d", targetBuildID, targetRepoID)
+	if bestRunName == "" || bestYaml == "" {
+		return "", "", "", fmt.Errorf(
+			"no matched unbound pipelinerun annotation for owner=%s repo=%s repo_id=%d",
+			targetOwner,
+			targetRepo,
+			targetRepoID,
+		)
+	}
+	return bestYaml, bestRunName, "owner/repo+repo_id+latest-unbound", nil
 }
 
 func (h *Handler) resolveDroneRepo(namespace string, req *restful.Request, body map[string]any) (string, string, error) {
