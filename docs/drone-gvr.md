@@ -1,134 +1,124 @@
-# Drone 集成说明（GVR + YAML 扩展）
+# Drone 集成说明（当前实现）
 
-本文记录 KubeSpark 后端当前对 Drone 的两类能力：
+更新时间：2026-04-19
 
-- Drone API 的 GVR 代理（统一资源入口）
-- Drone Configuration Extension（动态 YAML，下发前读取平台配置）
+本文描述 `kubespark` 后端目前已上线的 Drone 集成能力，包含：
 
-## 1. 路由
+- Drone 资源 GVR 代理（`/resources/drone/v1/*`）
+- Drone YAML Extension（`/kapis/v1alpha1/drone/yaml`）
+- PipelineRun 自动触发 Drone Build 与状态回写
 
-### 1.1 Drone GVR 代理
+## 1. 配置来源（固定 Secret）
 
-统一入口：
+后端统一从固定 Secret 读取 Drone 配置：
 
-- `/kapis/v1alpha1/resources/{group}/{version}/{resource}`
-- `group=drone`
-- `version=v1`
+- namespace: `kubespark`
+- name: `kubespark-secret`
 
-支持资源：
+必需键：
 
-- `repos`
-- `builds`
-
-完整路径：
-
-- `GET /kapis/v1alpha1/resources/drone/v1/repos`
-- `POST /kapis/v1alpha1/resources/drone/v1/repos`
-- `PUT /kapis/v1alpha1/resources/drone/v1/repos/{name}`
-- `DELETE /kapis/v1alpha1/resources/drone/v1/repos/{name}`
-- `GET /kapis/v1alpha1/resources/drone/v1/builds`
-- `POST /kapis/v1alpha1/resources/drone/v1/builds`
-- `PUT /kapis/v1alpha1/resources/drone/v1/builds/{name}`
-- `DELETE /kapis/v1alpha1/resources/drone/v1/builds/{name}`
-
-### 1.2 Drone YAML 扩展接口
-
-- `POST /kapis/v1alpha1/drone/yaml`
-- `GET /kapis/v1alpha1/drone/yaml`（用于手工调试）
+- `DRONE_SERVER`
+- `DRONE_TOKEN`
+- `DRONE_YAML_SECRET`
 
 说明：
 
-- 该接口不是给前端调用，不走 JWT。
-- 该接口使用 `DRONE_YAML_SECRET` 做 HTTP Signature 验签（Drone 官方扩展机制）。
+- 不读取后端环境变量兜底。
+- 缺少 `DRONE_SERVER` / `DRONE_TOKEN` 时，Drone 能力不可用（相关接口返回 `503`）。
 
-## 2. 环境变量
+## 2. 路由与能力边界
 
-### 2.1 Kubespark 后端
+### 2.1 Drone YAML Extension
 
-- `DRONE_SERVER`：Drone 地址，例如 `http://172.31.0.88:30001`
-- `DRONE_TOKEN`：Drone API Token（触发构建）
-- `DRONE_YAML_SECRET`：YAML 扩展验签密钥（必须和 Drone Server 一致）
+- `POST /kapis/v1alpha1/drone/yaml`
+- `GET /kapis/v1alpha1/drone/yaml`（仅调试）
 
-### 2.2 Drone Server
+要点：
 
-- `DRONE_YAML_ENDPOINT`：例如 `http://172.31.0.88:8080/kapis/v1alpha1/drone/yaml`
-- `DRONE_YAML_SECRET`：与 Kubespark 后端同值
+- 该接口不走 Kubespark JWT（由 Drone Server 调用）。
+- 使用 `DRONE_YAML_SECRET` 做 HTTP Signature 验签。
+- 命中返回 YAML；未命中返回 `204`，由 Drone 回退仓库 `.drone.yml`。
 
-## 3. YAML 来源（平台托管）
+### 2.2 Drone GVR 代理
 
-当前实现从 K8s Secret 读取 YAML：
+统一入口：
 
-- namespace：`kubespark`
-- name：`kubespark-drone-yaml-secret`
+- `/kapis/v1alpha1/resources/drone/v1/{resource}`
 
-按 owner/repo 匹配 key，优先级：
+当前资源支持：
 
-1. `owner__repo`
-2. `owner_repo`
-3. `owner-repo`
-4. `owner.repo`
-5. `repo`
+- `repos`
+- `reposync`
+- `builds`
+- `secrets`
 
-命中后返回 YAML；未命中返回 `204`（Drone 回退仓库 `.drone.yml`）。
+当前支持的方法：
 
-## 4. YAML 扩展响应协议
+- `GET /resources/drone/v1/repos`
+- `POST /resources/drone/v1/repos`
+- `POST /resources/drone/v1/reposync`
+- `GET /resources/drone/v1/builds`
+- `POST /resources/drone/v1/builds`
+- `GET /resources/drone/v1/secrets`
+- `POST /resources/drone/v1/secrets`
+- `DELETE /resources/drone/v1/secrets/{name}`
 
-Drone 请求头通常为：
+当前不支持（会返回 unsupported）：
 
-- `Accept: application/vnd.drone.config.v1+json`
+- `PUT /resources/drone/v1/repos/{name}`
+- `DELETE /resources/drone/v1/repos/{name}`
+- `PUT /resources/drone/v1/builds/{name}`
+- `DELETE /resources/drone/v1/builds/{name}`
+- `PUT /resources/drone/v1/secrets/{name}`
 
-后端响应策略：
+## 3. YAML 来源与匹配规则
 
-- `Accept` 包含 `json`：返回 `application/json`，格式 `{"data":"<yaml>"}`。
-- 其他：返回 `text/plain` 原始 YAML。
+`.drone.yml` 内容来自 `PipelineRun` 注解，不再从固定 YAML Secret 读取。
 
-## 5. GVR 参数约定
+读取注解键：
 
-### 5.1 repos
+- `tanqidi.com/drone-yaml`
 
-- 列表：无必填参数
-- 创建：需要 `namespace` + 仓库名（`repo` 查询参数或 body `metadata.name`）
-- 更新：需要 `namespace` + path `{name}`
-- 删除：需要 `namespace` + path `{name}`
+匹配策略：
 
-### 5.2 builds
+1. 从 Drone 请求体解析 `owner/repo`。
+2. 要求 `build.repo_id > 0`（仅用于有效性约束）。
+3. 在 `PipelineRun` 中筛选：
+   - 注解 `tanqidi.com/drone-yaml` 非空；
+   - 注解 `tanqidi.com/drone` 为空（未绑定 Drone 结果）；
+   - `spec.data.namespace/repo`（或兼容键）与请求 `owner/repo` 一致。
+4. 取“最新创建”的一条作为命中项返回。
 
-- 列表：需要 `namespace` + `repo`
-- 创建：需要 `namespace` + `repo`（body `spec` 透传给 Drone）
-- 更新（重启）：需要 `namespace` + `repo` + path `{name}`，`{name}` 为构建号
-- 删除（停止）：需要 `namespace` + `repo` + path `{name}`，`{name}` 为构建号
+## 4. PipelineRun 自动触发链路
 
-## 6. 常见故障排查
+当创建 `PipelineRun` 后：
 
-### 6.1 `missing DRONE_YAML_SECRET`
+1. 后端根据 `PipelineRun.spec.data` + `Pipeline.spec.data` 解析 `namespace/repo`。
+2. 调用 Drone：
+   - 检查仓库列表；
+   - 若未激活则激活仓库；
+   - 创建 build。
+3. 将 Drone build 结果 JSON 写回：
+   - `metadata.annotations["tanqidi.com/drone"]`
+4. 后台同步任务会定时刷新该注解中的构建状态。
 
-含义：处理 `/drone/yaml` 的进程未配置该变量。  
-注意：变量必须配置到“实际运行该 HTTP 服务”的进程（容器或主机进程）。
+说明：
 
-### 6.2 `invalid drone yaml signature`
+- 历史参数注入（例如 `kubespark_pipeline_run`、`build.inputs`、`build.action`）已移除，不再作为匹配依据。
 
-优先排查：
+## 5. 常见问题
 
-1. Drone 与 Kubespark 的 `DRONE_YAML_SECRET` 是否完全一致。
-2. 修改变量后是否重启了对应进程。
-3. 请求是否经过会改写签名相关头的代理。
+### 5.1 401 Unauthorized（调用 Drone API）
 
-### 6.3 `406: Not Acceptable`
+通常为 `DRONE_TOKEN` 无效、过期或权限不足。  
+先确认 `kubespark/kubespark-secret` 中 `DRONE_TOKEN` 正确，再重启后端。
 
-通常是扩展响应协商不匹配。当前实现已兼容 Drone vendor accept（`application/vnd.drone.config.v1+json`）。
+### 5.2 500 Bad credentials（激活仓库/触发构建）
 
-### 6.4 `invalid character 'k' looking for beginning of value`
+Drone 服务端凭据不可用（常见于 provider token 配置错误）。  
+需在 Drone Server 侧修复 provider 认证配置，再重试。
 
-含义：Drone 按 JSON 解析响应，但接口返回了纯文本 YAML。  
-当前实现已按 `Accept` 自动返回 JSON 包装。
+### 5.3 `invalid drone yaml signature`
 
-## 7. 调试示例
+`DRONE_YAML_SECRET` 两端不一致，或修改后未重启对应进程。
 
-```bash
-# 手工读取 YAML（调试）
-curl -i "http://localhost:8080/kapis/v1alpha1/drone/yaml?owner=tanqidi&repo=kubespark"
-
-# 通过 GVR 查询构建
-curl -X GET "http://localhost:8080/kapis/v1alpha1/resources/drone/v1/builds?namespace=tanqidi&repo=kubespark" \
-  -H "Authorization: Bearer <kubespark-jwt>"
-```

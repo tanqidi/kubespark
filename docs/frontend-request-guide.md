@@ -62,25 +62,40 @@ Drone 接口复用统一资源入口，不新增独立路由：
 
 - `GET /resources/drone/v1/repos`
 - `POST /resources/drone/v1/repos`
-- `PUT /resources/drone/v1/repos/{name}`
-- `DELETE /resources/drone/v1/repos/{name}`
+- `POST /resources/drone/v1/reposync`
 - `GET /resources/drone/v1/builds`
 - `POST /resources/drone/v1/builds`
-- `PUT /resources/drone/v1/builds/{name}`（`name` 为构建号）
-- `DELETE /resources/drone/v1/builds/{name}`（`name` 为构建号）
+- `GET /resources/drone/v1/secrets`
+- `POST /resources/drone/v1/secrets`
+- `DELETE /resources/drone/v1/secrets/{name}`
 
 参数约定：
 
 - `repos`：
   - 创建时需要 `namespace` + 仓库名（可从 body `metadata.name` 读取）。
-  - 更新/删除时需要 `namespace` + 路径参数 `{name}`。
+  - 列表不需要额外参数。
+- `reposync`：
+  - 无需参数，用于触发 Drone 同步当前用户可见仓库。
 - `builds`：
   - 列表/创建需要 `namespace` + `repo`。
-  - 重启/停止需要 `namespace` + `repo` + 路径参数 `{name}`（构建号）。
+- `secrets`：
+  - 列表需要 `namespace` + `repo`（`repo` 通过 query 参数传递）。
+  - 创建需要 `namespace` + `repo`，body 包含 `name` 与 `data`。
+  - 删除需要 `namespace` + `repo` + 路径参数 `{name}`。
+
+当前不支持：
+
+- `PUT /resources/drone/v1/repos/{name}`
+- `DELETE /resources/drone/v1/repos/{name}`
+- `PUT /resources/drone/v1/builds/{name}`
+- `DELETE /resources/drone/v1/builds/{name}`
+- `PUT /resources/drone/v1/secrets/{name}`
 
 环境变量约定：
 
-- `DRONE_SERVER`
-- `DRONE_TOKEN`
+- 后端统一从固定 Secret `kubespark/kubespark-secret` 读取：
+  - `DRONE_SERVER`
+  - `DRONE_TOKEN`
+  - `DRONE_YAML_SECRET`
 
 缺失时后端返回 `503`，提示 Drone 未配置。
