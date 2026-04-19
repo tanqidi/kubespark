@@ -6,22 +6,11 @@ import (
 
 // AddToContainer adds routes to the container
 func (h *Handler) AddToContainer(container *restful.Container) {
-	droneWS := new(restful.WebService)
-	droneWS.Path("/kapis/v1alpha1/drone").
-		Consumes("*/*").
-		Produces("*/*")
+	h.addDroneRoutes(container)
+	h.addKubernetesRoutes(container)
+}
 
-	// Drone YAML extension endpoint (use loose consumes for Drone server compatibility).
-	droneWS.Route(droneWS.GET("/yaml").To(h.GetDroneYaml).
-		Param(droneWS.QueryParameter("owner", "Repository owner/namespace").DataType("string")).
-		Param(droneWS.QueryParameter("repo", "Repository name").DataType("string")).
-		Produces("*/*").
-		Doc("Resolve Drone pipeline YAML from kubernetes secret"))
-	droneWS.Route(droneWS.POST("/yaml").To(h.GetDroneYaml).
-		Produces("*/*").
-		Doc("Resolve Drone pipeline YAML from kubernetes secret"))
-	container.Add(droneWS)
-
+func (h *Handler) addKubernetesRoutes(container *restful.Container) {
 	ws := new(restful.WebService)
 	ws.Path("/kapis/v1alpha1").
 		Consumes(restful.MIME_JSON).
