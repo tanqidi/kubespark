@@ -1633,6 +1633,15 @@ func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response
 		}
 		kapis.WriteCreated(resp, result)
 		return
+	case "reposync":
+		log.Printf("[drone-gvr] sync repos")
+		result, err := h.droneClient.SyncRepos(ctx)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteCreated(resp, result)
+		return
 	case "builds":
 		ns, repo, err := h.resolveDroneRepo(namespace, req, body)
 		if err != nil {

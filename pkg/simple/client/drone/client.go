@@ -188,6 +188,10 @@ func (c *Client) ListRepos(ctx context.Context) (any, error) {
 	return c.request(ctx, http.MethodGet, "/api/user/repos", nil, nil)
 }
 
+func (c *Client) SyncRepos(ctx context.Context) (any, error) {
+	return c.request(ctx, http.MethodPost, "/api/user/repos", nil, nil)
+}
+
 func (c *Client) ActivateRepo(ctx context.Context, namespace, name string) (any, error) {
 	return c.request(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(name), nil, nil)
 }
