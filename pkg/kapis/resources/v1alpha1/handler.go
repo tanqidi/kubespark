@@ -1585,6 +1585,20 @@ func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, 
 		}
 		kapis.WriteSuccess(resp, map[string]any{"items": result})
 		return
+	case "secrets":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, map[string]any{})
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		log.Printf("[drone-gvr] list secrets: namespace=%s repo=%s", ns, repo)
+		result, err := h.droneClient.ListSecrets(ctx, ns, repo)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, map[string]any{"items": result})
+		return
 	default:
 		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
 		return
@@ -1628,6 +1642,21 @@ func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response
 		spec, _ := body["spec"].(map[string]any)
 		log.Printf("[drone-gvr] create build: namespace=%s repo=%s", ns, repo)
 		result, err := h.droneClient.CreateBuild(ctx, ns, repo, spec)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteCreated(resp, result)
+		return
+	case "secrets":
+		ns := strings.TrimSpace(namespace)
+		repo := strings.TrimSpace(req.QueryParameter("repo"))
+		if ns == "" || repo == "" {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace and repo are required")
+			return
+		}
+		log.Printf("[drone-gvr] create secret: namespace=%s repo=%s", ns, repo)
+		result, err := h.droneClient.CreateSecret(ctx, ns, repo, body)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
 			return
@@ -1691,6 +1720,22 @@ func (h *Handler) handleDroneUpdate(req *restful.Request, resp *restful.Response
 		}
 		kapis.WriteSuccess(resp, result)
 		return
+	case "secrets":
+		ns := strings.TrimSpace(namespace)
+		repo := strings.TrimSpace(req.QueryParameter("repo"))
+		secretName := strings.TrimSpace(name)
+		if ns == "" || repo == "" || secretName == "" {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace/repo and path name are required")
+			return
+		}
+		log.Printf("[drone-gvr] update secret: namespace=%s repo=%s secret=%s", ns, repo, secretName)
+		result, err := h.droneClient.UpdateSecret(ctx, ns, repo, secretName, body)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
 	default:
 		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
 		return
@@ -1733,6 +1778,22 @@ func (h *Handler) handleDroneDelete(req *restful.Request, resp *restful.Response
 		}
 		log.Printf("[drone-gvr] stop build: namespace=%s repo=%s build=%d", ns, repo, number)
 		result, err := h.droneClient.StopBuild(ctx, ns, repo, number)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
+	case "secrets":
+		ns := strings.TrimSpace(namespace)
+		repo := strings.TrimSpace(req.QueryParameter("repo"))
+		secretName := strings.TrimSpace(name)
+		if ns == "" || repo == "" || secretName == "" {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "query parameter namespace/repo and path name are required")
+			return
+		}
+		log.Printf("[drone-gvr] delete secret: namespace=%s repo=%s secret=%s", ns, repo, secretName)
+		result, err := h.droneClient.DeleteSecret(ctx, ns, repo, secretName)
 		if err != nil {
 			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
 			return

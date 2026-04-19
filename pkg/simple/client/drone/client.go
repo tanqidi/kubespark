@@ -204,6 +204,40 @@ func (c *Client) ListBuilds(ctx context.Context, namespace, repo string) (any, e
 	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, nil)
 }
 
+func (c *Client) ListSecrets(ctx context.Context, namespace, repo string) (any, error) {
+	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets", nil, nil)
+}
+
+func (c *Client) DeleteSecret(ctx context.Context, namespace, repo, secretName string) (any, error) {
+	return c.request(
+		ctx,
+		http.MethodDelete,
+		"/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets/"+url.PathEscape(secretName),
+		nil,
+		nil,
+	)
+}
+
+func (c *Client) CreateSecret(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
+	return c.request(
+		ctx,
+		http.MethodPost,
+		"/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets",
+		nil,
+		body,
+	)
+}
+
+func (c *Client) UpdateSecret(ctx context.Context, namespace, repo, secretName string, body map[string]any) (any, error) {
+	return c.request(
+		ctx,
+		http.MethodPatch,
+		"/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets/"+url.PathEscape(secretName),
+		nil,
+		body,
+	)
+}
+
 func (c *Client) GetBuild(ctx context.Context, namespace, repo string, buildNumber int64) (any, error) {
 	return c.request(
 		ctx,
