@@ -7,8 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +19,6 @@ import (
 	"github.com/99designs/httpsignatures-go"
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/gorilla/websocket"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -38,9 +35,9 @@ type Handler struct {
 const (
 	pipelineRunSyncInterval = 8 * time.Second
 	pipelineRunSyncTimeout  = 20 * time.Second
-
-	droneYamlSecretNamespace = "kubespark"
-	droneYamlSecretName      = "kubespark-drone-yaml-secret"
+	droneYamlAnnotationKey  = "tanqidi.com/drone-yaml"
+	droneBuildIDAnnotation  = "tanqidi.com/drone-build-id"
+	droneRepoIDAnnotation   = "tanqidi.com/drone-repo-id"
 )
 
 // NewHandler creates a new API handler
@@ -169,7 +166,7 @@ func (h *Handler) GetClusterInfo(req *restful.Request, resp *restful.Response) {
 	kapis.WriteSuccess(resp, result)
 }
 
-// GetDroneYaml resolves drone pipeline yaml from kubernetes secret.
+// GetDroneYaml resolves drone pipeline yaml from PipelineRun annotations.
 // Protocol:
 // - 200 + raw yaml text when found.
 // - 204 when not found, so Drone can fallback to repository .drone.yml.
@@ -213,14 +210,14 @@ func (h *Handler) GetDroneYaml(req *restful.Request, resp *restful.Response) {
 	ctx, cancel := context.WithTimeout(req.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	yamlText, matchedKey, err := h.readDroneYamlFromSecret(ctx, owner, repo)
+	yamlText, matchedRun, matchedBy, err := h.readDroneYamlFromPipelineRunAnnotations(ctx, owner, repo, body)
 	if err != nil {
 		log.Printf("[drone-yaml] miss: owner=%s repo=%s err=%v", owner, repo, err)
 		resp.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	log.Printf("[drone-yaml] hit: owner=%s repo=%s key=%s bytes=%d", owner, repo, matchedKey, len(yamlText))
+	log.Printf("[drone-yaml] hit: owner=%s repo=%s run=%s by=%s bytes=%d", owner, repo, matchedRun, matchedBy, len(yamlText))
 	if acceptWantsJSON(accept) {
 		log.Printf("[drone-yaml] response: format=json")
 		resp.AddHeader("Content-Type", "application/json; charset=utf-8")
@@ -935,6 +932,9 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 	if err != nil {
 		return fmt.Errorf("marshal drone result failed: %w", err)
 	}
+	buildPayload, _ := buildResult.(map[string]any)
+	buildID := getMapInt64OrZero(buildPayload, "id")
+	repoID := getMapInt64OrZero(buildPayload, "repo_id")
 
 	applyAnnotations := func(target *unstructured.Unstructured) {
 		annotations := target.GetAnnotations()
@@ -943,6 +943,16 @@ func (h *Handler) updatePipelineRunDroneAnnotations(
 		}
 
 		annotations["tanqidi.com/drone"] = string(payloadBytes)
+		if buildID > 0 {
+			annotations[droneBuildIDAnnotation] = strconv.FormatInt(buildID, 10)
+		} else {
+			delete(annotations, droneBuildIDAnnotation)
+		}
+		if repoID > 0 {
+			annotations[droneRepoIDAnnotation] = strconv.FormatInt(repoID, 10)
+		} else {
+			delete(annotations, droneRepoIDAnnotation)
+		}
 		delete(annotations, "tanqidi.com/drone-namespace")
 		delete(annotations, "tanqidi.com/drone-repo")
 		delete(annotations, "tanqidi.com/drone-build-number")
@@ -1396,6 +1406,44 @@ func readStringFromMap(m map[string]any, path ...string) string {
 	return strings.TrimSpace(value)
 }
 
+func readInt64FromMap(m map[string]any, path ...string) int64 {
+	var current any = m
+	for _, key := range path {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return 0
+		}
+		current, ok = obj[key]
+		if !ok {
+			return 0
+		}
+	}
+	switch value := current.(type) {
+	case int:
+		return int64(value)
+	case int32:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	case json.Number:
+		n, err := value.Int64()
+		if err != nil {
+			return 0
+		}
+		return n
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return n
+	default:
+		return 0
+	}
+}
+
 func resolveDroneYamlRepo(req *restful.Request, body map[string]any) (string, string) {
 	owner := pickFirstNonEmpty(
 		req.QueryParameter("owner"),
@@ -1434,84 +1482,59 @@ func resolveDroneYamlRepo(req *restful.Request, body map[string]any) (string, st
 	return strings.TrimSpace(owner), strings.TrimSpace(repo)
 }
 
-func (h *Handler) readDroneYamlFromSecret(ctx context.Context, owner, repo string) (string, string, error) {
-	resource, err := h.resourcesOperator.GetResource(ctx, droneYamlSecretNamespace, "secrets", droneYamlSecretName, metav1.GetOptions{})
+func (h *Handler) readDroneYamlFromPipelineRunAnnotations(
+	ctx context.Context,
+	_,
+	_ string,
+	body map[string]any,
+) (string, string, string, error) {
+	pipelineRunGVR := schema.GroupVersionResource{
+		Group:    "tanqidi.com",
+		Version:  "v1alpha1",
+		Resource: "pipelineruns",
+	}
+
+	result, err := h.resourcesOperator.ListResourcesByGVR(ctx, pipelineRunGVR, metav1.NamespaceAll, metav1.ListOptions{})
 	if err != nil {
-		return "", "", fmt.Errorf("load secret failed: %w", err)
+		return "", "", "", fmt.Errorf("list pipelineruns failed: %w", err)
 	}
 
-	secret, ok := resource.(*corev1.Secret)
-	if !ok || secret == nil {
-		return "", "", fmt.Errorf("unexpected secret type: %T", resource)
-	}
-	if len(secret.Data) == 0 {
-		return "", "", fmt.Errorf("secret data is empty")
+	list, ok := result.(*unstructured.UnstructuredList)
+	if !ok {
+		return "", "", "", fmt.Errorf("unexpected pipelineruns list type: %T", result)
 	}
 
-	for _, key := range buildDroneYamlCandidateKeys(owner, repo) {
-		value, exists := secret.Data[key]
-		if !exists {
+	targetBuildID := readInt64FromMap(body, "build", "id")
+	targetRepoID := readInt64FromMap(body, "build", "repo_id")
+	if targetBuildID <= 0 || targetRepoID <= 0 {
+		return "", "", "", fmt.Errorf("missing build.id or build.repo_id")
+	}
+
+	for i := range list.Items {
+		item := &list.Items[i]
+		annotations := item.GetAnnotations()
+		if annotations == nil {
 			continue
 		}
-		text := strings.TrimSpace(string(value))
-		if text == "" {
-			return "", "", fmt.Errorf("key exists but empty: %s", key)
-		}
-		return text, key, nil
-	}
-
-	availableKeys := make([]string, 0, len(secret.Data))
-	for key := range secret.Data {
-		availableKeys = append(availableKeys, key)
-	}
-	slices.Sort(availableKeys)
-	if len(availableKeys) > 12 {
-		availableKeys = availableKeys[:12]
-	}
-	return "", "", fmt.Errorf("no matched key, tried=%v available=%v", buildDroneYamlCandidateKeys(owner, repo), availableKeys)
-}
-
-var secretKeyCleaner = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
-
-func sanitizeSecretKey(value string) string {
-	normalized := strings.TrimSpace(value)
-	if normalized == "" {
-		return ""
-	}
-	return strings.Trim(secretKeyCleaner.ReplaceAllString(normalized, "-"), "-")
-}
-
-func buildDroneYamlCandidateKeys(owner, repo string) []string {
-	owner = sanitizeSecretKey(owner)
-	repo = sanitizeSecretKey(repo)
-	if owner == "" || repo == "" {
-		if repo == "" {
-			return nil
-		}
-		return []string{repo}
-	}
-
-	candidates := []string{
-		owner + "__" + repo,
-		owner + "_" + repo,
-		owner + "-" + repo,
-		owner + "." + repo,
-		repo,
-	}
-
-	dedup := make([]string, 0, len(candidates))
-	seen := map[string]struct{}{}
-	for _, key := range candidates {
-		if key == "" {
+		runBuildID, err := strconv.ParseInt(strings.TrimSpace(annotations[droneBuildIDAnnotation]), 10, 64)
+		if err != nil || runBuildID <= 0 {
 			continue
 		}
-		if _, ok := seen[key]; ok {
+		runRepoID, err := strconv.ParseInt(strings.TrimSpace(annotations[droneRepoIDAnnotation]), 10, 64)
+		if err != nil || runRepoID <= 0 {
 			continue
 		}
-		seen[key] = struct{}{}
-		dedup = append(dedup, key)
+		if runBuildID != targetBuildID || runRepoID != targetRepoID {
+			continue
+		}
+		droneYaml := strings.TrimSpace(annotations[droneYamlAnnotationKey])
+		if droneYaml == "" {
+			continue
+		}
+		return droneYaml, strings.TrimSpace(item.GetName()), "build-id+repo-id", nil
 	}
-	return dedup
+
+	return "", "", "", fmt.Errorf("no matched pipelinerun annotation for build.id=%d repo_id=%d", targetBuildID, targetRepoID)
 }
 
 func (h *Handler) resolveDroneRepo(namespace string, req *restful.Request, body map[string]any) (string, string, error) {
