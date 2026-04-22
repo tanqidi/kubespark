@@ -22,9 +22,10 @@ const (
 	FixedDroneSecretName      = "kubespark-secret"
 	FixedDroneSecretNamespace = "kubespark"
 
-	secretKeyDroneServer     = "DRONE_SERVER"
-	secretKeyDroneToken      = "DRONE_TOKEN"
-	secretKeyDroneYAMLSecret = "DRONE_YAML_SECRET"
+	secretKeyDroneServer          = "DRONE_SERVER"
+	secretKeyDroneToken           = "DRONE_TOKEN"
+	secretKeyDroneYAMLSecret      = "DRONE_YAML_SECRET"
+	secretKeyKubesparkGitHubToken = "KUBESPARK_GITHUB_TOKEN"
 )
 
 type Client struct {
@@ -91,6 +92,14 @@ func ReadDroneYAMLSecret() (string, error) {
 		return "", err
 	}
 	return value, nil
+}
+
+func ReadKubesparkGitHubToken() (string, error) {
+	value, err := readDroneSecretValueRaw(secretKeyKubesparkGitHubToken)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func readDroneSecretValueRaw(key string) (string, error) {
@@ -200,8 +209,16 @@ func (c *Client) ListBuilds(ctx context.Context, namespace, repo string) (any, e
 	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, nil)
 }
 
+func (c *Client) GetRepo(ctx context.Context, namespace, repo string) (any, error) {
+	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo), nil, nil)
+}
+
 func (c *Client) ListSecrets(ctx context.Context, namespace, repo string) (any, error) {
 	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets", nil, nil)
+}
+
+func (c *Client) ListBranches(ctx context.Context, namespace, repo string) (any, error) {
+	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/branches", nil, nil)
 }
 
 func (c *Client) DeleteSecret(ctx context.Context, namespace, repo, secretName string) (any, error) {

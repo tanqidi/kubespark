@@ -68,6 +68,7 @@ Drone 接口复用统一资源入口，不新增独立路由：
 - `GET /resources/drone/v1/secrets`
 - `POST /resources/drone/v1/secrets`
 - `DELETE /resources/drone/v1/secrets/{name}`
+- `GET /resources/drone/v1/branches`
 
 参数约定：
 
@@ -82,6 +83,8 @@ Drone 接口复用统一资源入口，不新增独立路由：
   - 列表需要 `namespace` + `repo`（`repo` 通过 query 参数传递）。
   - 创建需要 `namespace` + `repo`，body 包含 `name` 与 `data`。
   - 删除需要 `namespace` + `repo` + 路径参数 `{name}`。
+- `branches`：
+  - 列表需要 `namespace` + `repo`（`repo` 通过 query 参数传递）。
 
 当前不支持：
 

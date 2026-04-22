@@ -21,6 +21,10 @@
 - `DRONE_TOKEN`
 - `DRONE_YAML_SECRET`
 
+可选键：
+
+- `KUBESPARK_GITHUB_TOKEN`（用于分支列表 GitHub 回退查询）
+
 说明：
 
 - 不读取后端环境变量兜底。
@@ -51,6 +55,7 @@
 - `reposync`
 - `builds`
 - `secrets`
+- `branches`
 
 当前支持的方法：
 
@@ -62,6 +67,13 @@
 - `GET /resources/drone/v1/secrets`
 - `POST /resources/drone/v1/secrets`
 - `DELETE /resources/drone/v1/secrets/{name}`
+- `GET /resources/drone/v1/branches`
+
+`branches` 兼容说明：
+
+- 不再调用 Drone `/branches`。
+- 直接调用 GitHub API：`GET https://api.github.com/repos/{owner}/{repo}/branches?per_page=100`
+- 使用 `kubespark/kubespark-secret` 中 `KUBESPARK_GITHUB_TOKEN`。
 
 当前不支持（会返回 unsupported）：
 
