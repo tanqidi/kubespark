@@ -100,5 +100,8 @@ Drone 接口复用统一资源入口，不新增独立路由：
   - `DRONE_SERVER`
   - `DRONE_TOKEN`
   - `DRONE_YAML_SECRET`
+  - `KUBESPARK_GIT_PROVIDER`（默认 `github`）
+  - `KUBESPARK_GIT_TOKEN`
+  - `KUBESPARK_GIT_URL`
 
 缺失时后端返回 `503`，提示 Drone 未配置。

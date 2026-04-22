@@ -432,15 +432,15 @@ func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, 
 			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
 			return
 		}
-		log.Printf("[drone-gvr] list branches via github: namespace=%s repo=%s", ns, repo)
-		githubBranches, githubErr := listGitHubBranches(ctx, ns, repo)
-		if githubErr == nil {
-			log.Printf("[drone-gvr] list branches success: namespace=%s repo=%s count=%d", ns, repo, len(githubBranches))
-			kapis.WriteSuccess(resp, map[string]any{"items": githubBranches})
+		log.Printf("[drone-gvr] list branches: namespace=%s repo=%s", ns, repo)
+		branches, branchesErr := listGitBranches(ctx, ns, repo)
+		if branchesErr == nil {
+			log.Printf("[drone-gvr] list branches success: namespace=%s repo=%s count=%d", ns, repo, len(branches))
+			kapis.WriteSuccess(resp, map[string]any{"items": branches})
 			return
 		}
-		log.Printf("[drone-gvr] list branches failed: namespace=%s repo=%s err=%v", ns, repo, githubErr)
-		kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, githubErr.Error())
+		log.Printf("[drone-gvr] list branches failed: namespace=%s repo=%s err=%v", ns, repo, branchesErr)
+		kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, branchesErr.Error())
 		return
 	default:
 		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
@@ -448,13 +448,16 @@ func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, 
 	}
 }
 
-func listGitHubBranches(ctx context.Context, owner, repo string) ([]map[string]any, error) {
-	token, err := drone.ReadKubesparkGitHubToken()
-	if err != nil || token == "" {
-		if err != nil {
-			return nil, fmt.Errorf("read KUBESPARK_GITHUB_TOKEN failed: %w", err)
-		}
-		return nil, fmt.Errorf("missing KUBESPARK_GITHUB_TOKEN")
+func listGitBranches(ctx context.Context, owner, repo string) ([]map[string]any, error) {
+	config, err := drone.ReadKubesparkGitConfig()
+	if err != nil {
+		return nil, fmt.Errorf("read git config failed: %w", err)
+	}
+	if config == nil {
+		return nil, fmt.Errorf("git config is nil")
+	}
+	if strings.TrimSpace(config.Token) == "" {
+		return nil, fmt.Errorf("missing KUBESPARK_GIT_TOKEN")
 	}
 
 	owner = strings.TrimSpace(owner)
@@ -463,21 +466,19 @@ func listGitHubBranches(ctx context.Context, owner, repo string) ([]map[string]a
 		return nil, fmt.Errorf("owner/repo is required")
 	}
 
-	endpoint := fmt.Sprintf(
-		"https://api.github.com/repos/%s/%s/branches?per_page=100",
-		url.PathEscape(owner),
-		url.PathEscape(repo),
-	)
-	log.Printf("[github] request start: method=GET url=%s", endpoint)
-	start := time.Now()
+	provider := strings.ToLower(strings.TrimSpace(config.Provider))
+	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
+	if baseURL == "" {
+		return nil, fmt.Errorf("missing KUBESPARK_GIT_URL for provider=%s", provider)
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	endpoint, req, err := buildGitBranchesRequest(ctx, provider, baseURL, owner, repo, config.Token)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "kubespark")
+
+	log.Printf("[git:%s] request start: method=GET url=%s", provider, endpoint)
+	start := time.Now()
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(req)
@@ -495,14 +496,14 @@ func listGitHubBranches(ctx context.Context, owner, repo string) ([]map[string]a
 		if message == "" {
 			message = resp.Status
 		}
-		log.Printf("[github] request failed: method=GET url=%s status=%d cost=%v msg=%s", endpoint, resp.StatusCode, time.Since(start), truncateLogString(message, 320))
-		return nil, fmt.Errorf("github request failed (%d): %s", resp.StatusCode, message)
+		log.Printf("[git:%s] request failed: method=GET url=%s status=%d cost=%v msg=%s", provider, endpoint, resp.StatusCode, time.Since(start), truncateLogString(message, 320))
+		return nil, fmt.Errorf("git provider %s request failed (%d): %s", provider, resp.StatusCode, message)
 	}
-	log.Printf("[github] request done: method=GET url=%s status=%d cost=%v", endpoint, resp.StatusCode, time.Since(start))
+	log.Printf("[git:%s] request done: method=GET url=%s status=%d cost=%v", provider, endpoint, resp.StatusCode, time.Since(start))
 
 	var payload []map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("decode github branches failed: %w", err)
+		return nil, fmt.Errorf("decode %s branches failed: %w", provider, err)
 	}
 
 	items := make([]map[string]any, 0, len(payload))
@@ -516,6 +517,56 @@ func listGitHubBranches(ctx context.Context, owner, repo string) ([]map[string]a
 		})
 	}
 	return items, nil
+}
+
+func buildGitBranchesRequest(
+	ctx context.Context,
+	provider,
+	baseURL,
+	owner,
+	repo,
+	token string,
+) (string, *http.Request, error) {
+	repoPath := url.PathEscape(owner) + "/" + url.PathEscape(repo)
+	var endpoint string
+
+	switch provider {
+	case "github":
+		endpoint = fmt.Sprintf("%s/repos/%s/branches?per_page=100", baseURL, repoPath)
+	case "gitee":
+		endpoint = fmt.Sprintf("%s/repos/%s/branches?per_page=100", baseURL, repoPath)
+	case "gitea":
+		endpoint = fmt.Sprintf("%s/repos/%s/branches?limit=100", baseURL, repoPath)
+	case "gitlab":
+		// GitLab requires URL-encoded full path as :id
+		endpoint = fmt.Sprintf("%s/projects/%s/repository/branches?per_page=100", baseURL, url.PathEscape(owner+"/"+repo))
+	default:
+		return "", nil, fmt.Errorf("unsupported KUBESPARK_GIT_PROVIDER: %s", provider)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", nil, err
+	}
+
+	switch provider {
+	case "github":
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	case "gitlab":
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("PRIVATE-TOKEN", token)
+	case "gitea":
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "token "+token)
+	case "gitee":
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "token "+token)
+	}
+	req.Header.Set("User-Agent", "kubespark")
+
+	return endpoint, req, nil
 }
 
 func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response, resource, namespace string) {

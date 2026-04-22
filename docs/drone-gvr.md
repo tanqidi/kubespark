@@ -23,7 +23,9 @@
 
 可选键：
 
-- `KUBESPARK_GITHUB_TOKEN`（用于分支列表 GitHub 回退查询）
+- `KUBESPARK_GIT_PROVIDER`（`github`/`gitlab`/`gitea`/`gitee`，默认 `github`）
+- `KUBESPARK_GIT_TOKEN`（用于分支列表查询）
+- `KUBESPARK_GIT_URL`（Git 平台 API 基地址，例如 `https://api.github.com`）
 
 说明：
 
@@ -72,8 +74,11 @@
 `branches` 兼容说明：
 
 - 不再调用 Drone `/branches`。
-- 直接调用 GitHub API：`GET https://api.github.com/repos/{owner}/{repo}/branches?per_page=100`
-- 使用 `kubespark/kubespark-secret` 中 `KUBESPARK_GITHUB_TOKEN`。
+- 直接调用 Git 平台 API（由 `KUBESPARK_GIT_PROVIDER` + `KUBESPARK_GIT_URL` 决定）：
+  - `github/gitee`：`GET {base}/repos/{owner}/{repo}/branches`
+  - `gitea`：`GET {base}/repos/{owner}/{repo}/branches`
+  - `gitlab`：`GET {base}/projects/{owner%2Frepo}/repository/branches`
+- 鉴权统一使用 `KUBESPARK_GIT_TOKEN`。
 
 当前不支持（会返回 unsupported）：
 
