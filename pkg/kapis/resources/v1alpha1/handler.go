@@ -764,6 +764,12 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 			buildSpec[key] = v
 		}
 	}
+	if readBuildSpecString(buildSpec, "branch") == "" {
+		if fallbackBranch := extractBranchFromPipelineRunDroneYAML(createdObj); fallbackBranch != "" {
+			buildSpec["branch"] = fallbackBranch
+		}
+	}
+	normalizeDroneBuildSpec(buildSpec)
 	if err := h.ensurePipelineRepoActive(repoNamespace, repoName); err != nil {
 		log.Printf("[pipeline-run] ensure repo active failed: run=%s pipeline=%s namespace=%s repo=%s err=%v", runName, pipelineName, repoNamespace, repoName, err)
 		return
@@ -772,6 +778,11 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer buildCancel()
 
+	if payload, marshalErr := json.Marshal(buildSpec); marshalErr == nil {
+		log.Printf("[pipeline-run] trigger build payload: run=%s pipeline=%s namespace=%s repo=%s payload=%s", runName, pipelineName, repoNamespace, repoName, string(payload))
+	} else {
+		log.Printf("[pipeline-run] trigger build payload marshal failed: run=%s pipeline=%s namespace=%s repo=%s err=%v payload=%v", runName, pipelineName, repoNamespace, repoName, marshalErr, buildSpec)
+	}
 	log.Printf("[pipeline-run] trigger build start: run=%s pipeline=%s namespace=%s repo=%s", runName, pipelineName, repoNamespace, repoName)
 	result, err := h.droneClient.CreateBuild(buildCtx, repoNamespace, repoName, buildSpec)
 	if err != nil {
@@ -783,6 +794,134 @@ func (h *Handler) handlePipelineRunCreated(created any) {
 	if err := h.updatePipelineRunDroneAnnotations(createdObj, result); err != nil {
 		log.Printf("[pipeline-run] update drone annotation failed: run=%s err=%v", runName, err)
 	}
+}
+
+func normalizeDroneBuildSpec(spec map[string]any) {
+	if spec == nil {
+		return
+	}
+
+	branch := readBuildSpecString(spec, "branch")
+	if branch == "" {
+		return
+	}
+
+	if readBuildSpecString(spec, "target") == "" {
+		spec["target"] = branch
+	}
+	if readBuildSpecString(spec, "source") == "" {
+		spec["source"] = branch
+	}
+	if readBuildSpecString(spec, "ref") == "" {
+		spec["ref"] = "refs/heads/" + branch
+	}
+}
+
+func readBuildSpecString(spec map[string]any, key string) string {
+	if spec == nil {
+		return ""
+	}
+	value, ok := spec[key]
+	if !ok || value == nil {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func extractBranchFromPipelineRunDroneYAML(runObj *unstructured.Unstructured) string {
+	if runObj == nil {
+		return ""
+	}
+	annotations := runObj.GetAnnotations()
+	if annotations == nil {
+		return ""
+	}
+	yamlText := strings.TrimSpace(annotations[droneYamlAnnotationKey])
+	if yamlText == "" {
+		return ""
+	}
+
+	lines := strings.Split(yamlText, "\n")
+	triggerIndex := -1
+	triggerIndent := 0
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "trigger:") {
+			triggerIndex = i
+			triggerIndent = countLeadingSpaces(line)
+			break
+		}
+	}
+	if triggerIndex < 0 {
+		return ""
+	}
+
+	triggerEnd := len(lines)
+	for i := triggerIndex + 1; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if countLeadingSpaces(line) <= triggerIndent {
+			triggerEnd = i
+			break
+		}
+	}
+
+	branchIndex := -1
+	branchIndent := 0
+	for i := triggerIndex + 1; i < triggerEnd; i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "branch:") {
+			branchIndex = i
+			branchIndent = countLeadingSpaces(line)
+			break
+		}
+	}
+	if branchIndex < 0 {
+		return ""
+	}
+
+	for i := branchIndex + 1; i < triggerEnd; i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if countLeadingSpaces(line) <= branchIndent {
+			break
+		}
+		if strings.HasPrefix(trimmed, "-") {
+			candidate := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+			candidate = strings.Trim(candidate, "\"'")
+			if candidate != "" {
+				return candidate
+			}
+		}
+	}
+
+	return ""
+}
+
+func countLeadingSpaces(value string) int {
+	for i, ch := range value {
+		if ch != ' ' {
+			return i
+		}
+	}
+	return len(value)
 }
 
 func (h *Handler) updatePipelineRunDroneAnnotations(

@@ -300,5 +300,44 @@ func (c *Client) GetBuild(ctx context.Context, namespace, repo string, buildNumb
 }
 
 func (c *Client) CreateBuild(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
-	return c.request(ctx, http.MethodPost, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds", nil, body)
+	query := url.Values{}
+	for key, raw := range body {
+		k := strings.TrimSpace(key)
+		if k == "" || raw == nil {
+			continue
+		}
+
+		var value string
+		switch typed := raw.(type) {
+		case string:
+			value = strings.TrimSpace(typed)
+		case fmt.Stringer:
+			value = strings.TrimSpace(typed.String())
+		case int:
+			value = strconv.Itoa(typed)
+		case int64:
+			value = strconv.FormatInt(typed, 10)
+		case float64:
+			value = strconv.FormatFloat(typed, 'f', -1, 64)
+		case bool:
+			value = strconv.FormatBool(typed)
+		default:
+			value = strings.TrimSpace(fmt.Sprint(raw))
+		}
+		if value == "" {
+			continue
+		}
+
+		query.Set(k, value)
+	}
+
+	// Drone Build Create API expects branch / commit (and custom params) in query string.
+	// See: https://docs.drone.io/api/builds/build_create/
+	return c.request(
+		ctx,
+		http.MethodPost,
+		"/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/builds",
+		query,
+		nil,
+	)
 }

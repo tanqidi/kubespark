@@ -53,12 +53,12 @@ func (h *Handler) GetDroneYaml(req *restful.Request, resp *restful.Response) {
 		contentType,
 		accept,
 		req.Request.URL.RawQuery,
-		truncateLogString(rawBody, 600),
+		rawBody,
 	)
 
 	owner, repo := resolveDroneYamlRepo(req, body)
 	if owner == "" || repo == "" {
-		log.Printf("[drone-yaml] skip: unresolved owner/repo query=%s body=%s", req.Request.URL.RawQuery, truncateLogString(rawBody, 600))
+		log.Printf("[drone-yaml] skip: unresolved owner/repo query=%s body=%s", req.Request.URL.RawQuery, rawBody)
 		resp.WriteHeader(http.StatusNoContent)
 		return
 	}
