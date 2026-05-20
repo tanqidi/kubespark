@@ -218,6 +218,27 @@ func (c *Client) DeleteSecret(ctx context.Context, namespace, repo, secretName s
 	)
 }
 
+func (c *Client) GetBuildLogs(ctx context.Context, namespace, repo string, buildNumber int64, stage, step int64) (string, error) {
+	path := "/api/repos/" + url.PathEscape(namespace) + "/" + url.PathEscape(repo) + "/builds/" + strconv.FormatInt(buildNumber, 10) + "/logs"
+	if stage >= 0 && step >= 0 {
+		path += "/" + strconv.FormatInt(stage, 10) + "/" + strconv.FormatInt(step, 10)
+	}
+	result, err := c.request(
+		ctx,
+		http.MethodGet,
+		path,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return "", err
+	}
+	if logStr, ok := result.(string); ok {
+		return logStr, nil
+	}
+	return fmt.Sprint(result), nil
+}
+
 func (c *Client) CreateSecret(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
 	return c.request(
 		ctx,

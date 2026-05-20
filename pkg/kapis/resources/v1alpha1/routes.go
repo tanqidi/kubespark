@@ -53,6 +53,15 @@ func (h *Handler) addKubernetesRoutes(container *restful.Container) {
 		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
 		Doc("Delete resource by GVR (Group Version Resource)"))
 
+	// Get a specific resource by GVR
+	ws.Route(ws.GET("/resources/{group}/{version}/{resource}/{name}").To(h.GetResourceDetail).
+		Param(ws.PathParameter("group", "API group").DataType("string")).
+		Param(ws.PathParameter("version", "API version").DataType("string")).
+		Param(ws.PathParameter("resource", "Resource name").DataType("string")).
+		Param(ws.PathParameter("name", "Resource name").DataType("string")).
+		Param(ws.QueryParameter("namespace", "Namespace name").DataType("string")).
+		Doc("Get resource by GVR (Group Version Resource)"))
+
 	// Get logs from a resource by GVR (currently supports core/v1 pods only)
 	ws.Route(ws.GET("/resources/{group}/{version}/{resource}/{name}/log").To(h.GetPodLogs).
 		Param(ws.PathParameter("group", "API group").DataType("string")).

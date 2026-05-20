@@ -350,9 +350,22 @@ func (h *Handler) GetNamespaceResources(req *restful.Request, resp *restful.Resp
 
 // GetResourceDetail gets a specific resource in a namespace
 func (h *Handler) GetResourceDetail(req *restful.Request, resp *restful.Response) {
-	namespace := req.PathParameter("namespace")
+	group := req.PathParameter("group")
+	version := req.PathParameter("version")
 	resource := req.PathParameter("resource")
 	name := req.PathParameter("name")
+	namespace := req.QueryParameter("namespace")
+
+	if h.isDroneGVR(group, version) {
+		h.handleDroneGet(req, resp, resource, namespace, name)
+		return
+	}
+
+	// Translate "core" group from the HTTP path into the empty string that
+	// Kubernetes expects for core resources.
+	if group == "core" {
+		group = ""
+	}
 
 	result, err := h.resourcesOperator.GetResource(req.Request.Context(), namespace, resource, name, metav1.GetOptions{})
 	if err != nil {

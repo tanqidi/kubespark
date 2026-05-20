@@ -431,6 +431,55 @@ func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, 
 	}
 }
 
+func (h *Handler) handleDroneGet(req *restful.Request, resp *restful.Response, resource, namespace, name string) {
+	if !h.ensureDroneConfigured(resp) {
+		return
+	}
+
+	log.Printf("[drone-gvr] get: resource=%s namespace=%s name=%s query=%s", resource, namespace, name, req.Request.URL.RawQuery)
+	ctx := req.Request.Context()
+	switch strings.ToLower(strings.TrimSpace(resource)) {
+	case "logs":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, map[string]any{})
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		buildNumber, err := strconv.ParseInt(name, 10, 64)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "invalid build number")
+			return
+		}
+
+		stage := int64(-1)
+		step := int64(-1)
+		if stageStr := req.QueryParameter("stage"); stageStr != "" {
+			if s, err := strconv.ParseInt(stageStr, 10, 64); err == nil {
+				stage = s
+			}
+		}
+		if stepStr := req.QueryParameter("step"); stepStr != "" {
+			if s, err := strconv.ParseInt(stepStr, 10, 64); err == nil {
+				step = s
+			}
+		}
+
+		log.Printf("[drone-gvr] get logs: namespace=%s repo=%s build=%d stage=%d step=%d", ns, repo, buildNumber, stage, step)
+		logs, err := h.droneClient.GetBuildLogs(ctx, ns, repo, buildNumber, stage, step)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		resp.AddHeader("Content-Type", "text/plain; charset=utf-8")
+		resp.WriteHeader(http.StatusOK)
+		_, _ = resp.Write([]byte(logs))
+		return
+	default:
+		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)
+		return
+	}
+}
+
 func (h *Handler) handleDroneCreate(req *restful.Request, resp *restful.Response, resource, namespace string) {
 	if !h.ensureDroneConfigured(resp) {
 		return
