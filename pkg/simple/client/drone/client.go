@@ -22,24 +22,15 @@ const (
 	FixedDroneSecretName      = "kubespark-secret"
 	FixedDroneSecretNamespace = "kubespark"
 
-	secretKeyDroneServer          = "DRONE_SERVER"
-	secretKeyDroneToken           = "DRONE_TOKEN"
-	secretKeyDroneYAMLSecret      = "DRONE_YAML_SECRET"
-	secretKeyKubesparkGitProvider = "KUBESPARK_GIT_PROVIDER"
-	secretKeyKubesparkGitToken    = "KUBESPARK_GIT_TOKEN"
-	secretKeyKubesparkGitURL      = "KUBESPARK_GIT_URL"
+	secretKeyDroneServer     = "DRONE_SERVER"
+	secretKeyDroneToken      = "DRONE_TOKEN"
+	secretKeyDroneYAMLSecret = "DRONE_YAML_SECRET"
 )
 
 type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
-}
-
-type GitConfig struct {
-	Provider string
-	Token    string
-	BaseURL  string
 }
 
 func NewClientFromSecret() *Client {
@@ -100,54 +91,6 @@ func ReadDroneYAMLSecret() (string, error) {
 		return "", err
 	}
 	return value, nil
-}
-
-func ReadKubesparkGitConfig() (*GitConfig, error) {
-	secretData, err := readDroneSecretData()
-	if err != nil {
-		return nil, err
-	}
-
-	readSecretValue := func(key string) string {
-		value, ok := secretData[key]
-		if !ok {
-			return ""
-		}
-		return strings.TrimSpace(string(value))
-	}
-
-	provider := strings.ToLower(readSecretValue(secretKeyKubesparkGitProvider))
-	token := readSecretValue(secretKeyKubesparkGitToken)
-	baseURL := normalizeBaseURL(readSecretValue(secretKeyKubesparkGitURL))
-
-	if provider == "" {
-		provider = "github"
-	}
-	if baseURL == "" {
-		baseURL = defaultGitAPIBaseURL(provider)
-	}
-
-	return &GitConfig{
-		Provider: provider,
-		Token:    token,
-		BaseURL:  baseURL,
-	}, nil
-}
-
-func defaultGitAPIBaseURL(provider string) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "github":
-		return "https://api.github.com"
-	case "gitee":
-		return "https://gitee.com/api/v5"
-	case "gitlab":
-		return "https://gitlab.com/api/v4"
-	case "gitea":
-		// Self-hosted deployments should set KUBESPARK_GIT_URL explicitly.
-		return ""
-	default:
-		return ""
-	}
 }
 
 func readDroneSecretValueRaw(key string) (string, error) {
@@ -263,10 +206,6 @@ func (c *Client) GetRepo(ctx context.Context, namespace, repo string) (any, erro
 
 func (c *Client) ListSecrets(ctx context.Context, namespace, repo string) (any, error) {
 	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/secrets", nil, nil)
-}
-
-func (c *Client) ListBranches(ctx context.Context, namespace, repo string) (any, error) {
-	return c.request(ctx, http.MethodGet, "/api/repos/"+url.PathEscape(namespace)+"/"+url.PathEscape(repo)+"/branches", nil, nil)
 }
 
 func (c *Client) DeleteSecret(ctx context.Context, namespace, repo, secretName string) (any, error) {

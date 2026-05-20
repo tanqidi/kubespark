@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -46,32 +47,33 @@ func NewClient() (Interface, error) {
 	var config *rest.Config
 	var err error
 
-	// 1. Try in-cluster config (when running inside a Pod)
 	config, err = rest.InClusterConfig()
-	if err != nil {
-		// 2. Try kubeconfig file
+	if err == nil {
+		fmt.Println("[kubeconfig] using in-cluster config")
+	} else {
 		var kubeconfig string
 		if home := homedir.HomeDir(); home != "" {
 			kubeconfig = filepath.Join(home, ".kube", "config")
 		}
 
-		if _, err := os.Stat(kubeconfig); err == nil {
+		if _, statErr := os.Stat(kubeconfig); statErr == nil {
+			fmt.Printf("[kubeconfig] found at: %s\n", kubeconfig)
 			config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 			if err != nil {
+				fmt.Printf("[kubeconfig] failed to load: %v\n", err)
 				return nil, err
 			}
 		} else {
-			return nil, err
+			fmt.Printf("[kubeconfig] not found at: %s\n", kubeconfig)
+			return nil, statErr
 		}
 	}
 
-	// Create standard clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create dynamic client (for handling all resources)
 	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
 		return nil, err
