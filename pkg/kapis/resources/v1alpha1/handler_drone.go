@@ -439,6 +439,25 @@ func (h *Handler) handleDroneGet(req *restful.Request, resp *restful.Response, r
 	log.Printf("[drone-gvr] get: resource=%s namespace=%s name=%s query=%s", resource, namespace, name, req.Request.URL.RawQuery)
 	ctx := req.Request.Context()
 	switch strings.ToLower(strings.TrimSpace(resource)) {
+	case "builds":
+		ns, repo, err := h.resolveDroneRepo(namespace, req, map[string]any{})
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, err.Error())
+			return
+		}
+		buildNumber, err := strconv.ParseInt(name, 10, 64)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "invalid build number")
+			return
+		}
+		log.Printf("[drone-gvr] get build: namespace=%s repo=%s build=%d", ns, repo, buildNumber)
+		result, err := h.droneClient.GetBuild(ctx, ns, repo, buildNumber)
+		if err != nil {
+			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
+			return
+		}
+		kapis.WriteSuccess(resp, result)
+		return
 	case "logs":
 		ns, repo, err := h.resolveDroneRepo(namespace, req, map[string]any{})
 		if err != nil {
