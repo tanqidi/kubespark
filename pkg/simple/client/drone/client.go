@@ -264,57 +264,6 @@ func BuildBuildLogsStreamURL(baseURL, namespace, repo string, buildNumber int64,
 	return baseURL + path
 }
 
-// GetBuildLogs fetches the build logs directly
-// Returns: (logs string, hasLogs bool, error)
-func (c *Client) GetBuildLogs(ctx context.Context, namespace, repo string, buildNumber int64, stage, step int64) (string, bool, error) {
-	if c == nil {
-		return "", false, fmt.Errorf("drone client not configured")
-	}
-
-	path := fmt.Sprintf("/api/repos/%s/%s/builds/%d/logs", url.PathEscape(namespace), url.PathEscape(repo), buildNumber)
-	if stage >= 0 && step >= 0 {
-		path = fmt.Sprintf("/api/repos/%s/%s/builds/%d/logs/%d/%d", url.PathEscape(namespace), url.PathEscape(repo), buildNumber, stage, step)
-	}
-
-	endpoint := c.baseURL + path
-	log.Printf("[drone] fetch logs: url=%s", endpoint)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return "", false, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("[drone] fetch logs failed: err=%v", err)
-		return "", false, err
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", false, err
-	}
-
-	if resp.StatusCode == http.StatusNotFound {
-		log.Printf("[drone] logs not found (404): build=%d stage=%d step=%d", buildNumber, stage, step)
-		return "", false, nil
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(data))
-		if msg == "" {
-			msg = resp.Status
-		}
-		return "", false, fmt.Errorf("failed to fetch logs (%d): %s", resp.StatusCode, msg)
-	}
-
-	logs := strings.TrimSpace(string(data))
-	log.Printf("[drone] logs fetched: build=%d stage=%d step=%d bytes=%d", buildNumber, stage, step, len(logs))
-	return logs, true, nil
-}
-
 func (c *Client) CreateBuild(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
 	query := url.Values{}
 	for key, raw := range body {
