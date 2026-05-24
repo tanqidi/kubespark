@@ -366,6 +366,8 @@ func (h *Handler) readDroneYamlFromPipelineRunAnnotations(
 func (h *Handler) resolveDroneRepo(namespace string, req *restful.Request, body map[string]any) (string, string, error) {
 	ns := strings.TrimSpace(namespace)
 	repo := strings.TrimSpace(req.QueryParameter("repo"))
+
+	// 先直接获取 repo 信息
 	if repo == "" {
 		repo = h.parseNameFromFieldSelector(req.QueryParameter("fieldSelector"))
 	}
@@ -375,10 +377,66 @@ func (h *Handler) resolveDroneRepo(namespace string, req *restful.Request, body 
 	if ns == "" {
 		ns = readStringFromMap(body, "metadata", "namespace")
 	}
+
+	// 如果已经有 namespace 和 repo 了，直接返回
+	if ns != "" && repo != "" {
+		// 检查是否是 pipeline，如果是 pipeline 则需要查找对应的 drone namespace/repo
+		pipelineName := strings.TrimSpace(req.QueryParameter("fieldSelector"))
+		if pipelineName != "" && strings.Contains(pipelineName, "metadata.name=") {
+			pipelineName = strings.TrimPrefix(pipelineName, "metadata.name=")
+			pipelineName = strings.TrimSpace(pipelineName)
+			if pipelineName != "" {
+				droneNs, droneRepo := h.loadDroneInfoFromPipeline(ns, pipelineName)
+				if droneNs != "" && droneRepo != "" {
+					return droneNs, droneRepo, nil
+				}
+			}
+		}
+		return ns, repo, nil
+	}
+
 	if ns == "" || repo == "" {
 		return "", "", fmt.Errorf("query parameter namespace and repo are required")
 	}
 	return ns, repo, nil
+}
+
+func (h *Handler) loadDroneInfoFromPipeline(namespace, pipelineName string) (string, string) {
+	pipelineGVR := schema.GroupVersionResource{
+		Group:    "tanqidi.com",
+		Version:  "v1alpha1",
+		Resource: "pipelines",
+	}
+
+	result, err := h.resourcesOperator.ListResourcesByGVR(context.Background(), pipelineGVR, namespace, metav1.ListOptions{
+		FieldSelector: "metadata.name=" + pipelineName,
+	})
+	if err != nil {
+		log.Printf("[drone] load pipeline failed: pipeline=%s err=%v", pipelineName, err)
+		return "", ""
+	}
+
+	list, ok := result.(*unstructured.UnstructuredList)
+	if !ok || len(list.Items) == 0 {
+		log.Printf("[drone] pipeline not found: pipeline=%s", pipelineName)
+		return "", ""
+	}
+
+	data, _, _ := unstructured.NestedStringMap(list.Items[0].Object, "spec", "data")
+
+	droneNs := pickFirstNonEmpty(
+		data["droneNamespace"],
+		data["namespace"],
+		data["repoNamespace"],
+		namespace,
+	)
+	droneRepo := pickFirstNonEmpty(
+		data["droneRepo"],
+		data["repo"],
+		pipelineName,
+	)
+
+	return droneNs, droneRepo
 }
 
 func (h *Handler) handleDroneList(req *restful.Request, resp *restful.Response, resource, namespace string) {
