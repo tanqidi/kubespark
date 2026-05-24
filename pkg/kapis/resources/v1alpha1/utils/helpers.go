@@ -2,10 +2,12 @@ package utils
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"strconv"
 	"strings"
 
+	"github.com/99designs/httpsignatures-go"
 	restful "github.com/emicklei/go-restful/v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -315,4 +317,66 @@ func ExtractBranchFromPipelineRunDroneYAML(runObj *unstructured.Unstructured) st
 	}
 
 	return ""
+}
+
+func ResolveDroneYamlRepo(req *restful.Request, body map[string]any) (string, string) {
+	owner := PickFirstNonEmpty(
+		req.QueryParameter("owner"),
+		req.QueryParameter("namespace"),
+		req.QueryParameter("repoNamespace"),
+		ReadStringFromMap(body, "repo", "namespace"),
+		ReadStringFromMap(body, "repo", "owner"),
+		ReadStringFromMap(body, "build", "namespace"),
+		ReadStringFromMap(body, "build", "author_login"),
+		ReadStringFromMap(body, "build", "sender"),
+	)
+	repo := PickFirstNonEmpty(
+		req.QueryParameter("repo"),
+		ReadStringFromMap(body, "repo", "name"),
+		ReadStringFromMap(body, "build", "repo"),
+	)
+
+	if owner == "" || repo == "" {
+		slug := PickFirstNonEmpty(
+			req.QueryParameter("slug"),
+			ReadStringFromMap(body, "repo", "slug"),
+			ReadStringFromMap(body, "build", "repo"),
+		)
+		if strings.Contains(slug, "/") {
+			parts := strings.SplitN(slug, "/", 2)
+			if owner == "" {
+				owner = strings.TrimSpace(parts[0])
+			}
+			if repo == "" {
+				repo = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+
+	return strings.TrimSpace(owner), strings.TrimSpace(repo)
+}
+
+func VerifyDroneYAMLRequest(r *restful.Request, readSecret func() (string, error)) error {
+	if r == nil || r.Request == nil {
+		return fmt.Errorf("nil request")
+	}
+	secret, err := readSecret()
+	if err != nil || secret == "" {
+		if err != nil {
+			return fmt.Errorf("read DRONE_YAML_SECRET from secret failed: %w", err)
+		}
+		return fmt.Errorf("missing DRONE_YAML_SECRET in secret")
+	}
+	if strings.TrimSpace(r.Request.Header.Get("Signature")) == "" {
+		return fmt.Errorf("missing Signature header")
+	}
+
+	signature, err := httpsignatures.FromRequest(r.Request)
+	if err != nil {
+		return fmt.Errorf("read signature failed: %w", err)
+	}
+	if !signature.IsValid(secret, r.Request) {
+		return fmt.Errorf("signature validation failed")
+	}
+	return nil
 }
