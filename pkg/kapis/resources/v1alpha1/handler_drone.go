@@ -483,15 +483,16 @@ func (h *Handler) handleDroneGet(req *restful.Request, resp *restful.Response, r
 			}
 		}
 
-		log.Printf("[drone-gvr] get logs: namespace=%s repo=%s build=%d stage=%d step=%d", ns, repo, buildNumber, stage, step)
-		logs, err := h.droneClient.GetBuildLogs(ctx, ns, repo, buildNumber, stage, step)
-		if err != nil {
-			kapis.WriteErrorWithCode(resp, http.StatusBadGateway, http.StatusBadGateway, err.Error())
-			return
-		}
-		resp.AddHeader("Content-Type", "text/plain; charset=utf-8")
-		resp.WriteHeader(http.StatusOK)
-		_, _ = resp.Write([]byte(logs))
+		baseURL := h.droneClient.GetServerBaseURL()
+		logsURL := drone.BuildBuildLogsURL(baseURL, ns, repo, buildNumber, stage, step)
+		logsStreamURL := drone.BuildBuildLogsStreamURL(baseURL, ns, repo, buildNumber, stage, step)
+
+		log.Printf("[drone-gvr] logs URLs: namespace=%s repo=%s build=%d stage=%d step=%d logsURL=%s streamURL=%s", ns, repo, buildNumber, stage, step, logsURL, logsStreamURL)
+
+		kapis.WriteSuccess(resp, map[string]string{
+			"logsURL":       logsURL,
+			"logsStreamURL": logsStreamURL,
+		})
 		return
 	default:
 		kapis.WriteErrorWithCode(resp, http.StatusBadRequest, http.StatusBadRequest, "unsupported drone resource: "+resource)

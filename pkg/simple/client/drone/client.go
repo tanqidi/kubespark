@@ -218,27 +218,6 @@ func (c *Client) DeleteSecret(ctx context.Context, namespace, repo, secretName s
 	)
 }
 
-func (c *Client) GetBuildLogs(ctx context.Context, namespace, repo string, buildNumber int64, stage, step int64) (string, error) {
-	path := "/api/repos/" + url.PathEscape(namespace) + "/" + url.PathEscape(repo) + "/builds/" + strconv.FormatInt(buildNumber, 10) + "/logs"
-	if stage >= 0 && step >= 0 {
-		path += "/" + strconv.FormatInt(stage, 10) + "/" + strconv.FormatInt(step, 10)
-	}
-	result, err := c.request(
-		ctx,
-		http.MethodGet,
-		path,
-		nil,
-		nil,
-	)
-	if err != nil {
-		return "", err
-	}
-	if logStr, ok := result.(string); ok {
-		return logStr, nil
-	}
-	return fmt.Sprint(result), nil
-}
-
 func (c *Client) CreateSecret(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
 	return c.request(
 		ctx,
@@ -257,6 +236,32 @@ func (c *Client) GetBuild(ctx context.Context, namespace, repo string, buildNumb
 		nil,
 		nil,
 	)
+}
+
+// GetServerBaseURL returns the Drone server base URL
+func (c *Client) GetServerBaseURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.baseURL
+}
+
+// BuildBuildLogsURL returns the full URL for build logs (GET endpoint)
+func BuildBuildLogsURL(baseURL, namespace, repo string, buildNumber int64, stage, step int64) string {
+	path := fmt.Sprintf("/api/repos/%s/%s/builds/%d/logs", url.PathEscape(namespace), url.PathEscape(repo), buildNumber)
+	if stage >= 0 && step >= 0 {
+		path = fmt.Sprintf("/api/repos/%s/%s/builds/%d/logs/%d/%d", url.PathEscape(namespace), url.PathEscape(repo), buildNumber, stage, step)
+	}
+	return baseURL + path
+}
+
+// BuildBuildLogsStreamURL returns the full URL for build logs stream (SSE endpoint)
+func BuildBuildLogsStreamURL(baseURL, namespace, repo string, buildNumber int64, stage, step int64) string {
+	path := fmt.Sprintf("/api/stream/%s/%s/%d", url.PathEscape(namespace), url.PathEscape(repo), buildNumber)
+	if stage >= 0 && step >= 0 {
+		path = fmt.Sprintf("/api/stream/%s/%s/%d/%d/%d", url.PathEscape(namespace), url.PathEscape(repo), buildNumber, stage, step)
+	}
+	return baseURL + path
 }
 
 func (c *Client) CreateBuild(ctx context.Context, namespace, repo string, body map[string]any) (any, error) {
@@ -291,8 +296,6 @@ func (c *Client) CreateBuild(ctx context.Context, namespace, repo string, body m
 		query.Set(k, value)
 	}
 
-	// Drone Build Create API expects branch / commit (and custom params) in query string.
-	// See: https://docs.drone.io/api/builds/build_create/
 	return c.request(
 		ctx,
 		http.MethodPost,
