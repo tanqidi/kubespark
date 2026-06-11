@@ -72,10 +72,8 @@ func (h *Handler) Login(req *restful.Request, resp *restful.Response) {
 		return
 	}
 
-	// Generate JWT token (include password hash in token for additional security)
-	// This ensures that even if attackers obtain JWT secret and username,
-	// they cannot generate valid tokens without knowing the password
-	token, err := GenerateToken(loginReq.Username, loginReq.Password)
+	// Generate JWT token
+	token, err := GenerateToken(loginReq.Username)
 	if err != nil {
 		kapis.WriteErrorWithCode(resp, http.StatusInternalServerError, http.StatusInternalServerError, "Failed to generate token")
 		return

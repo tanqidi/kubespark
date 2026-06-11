@@ -244,12 +244,11 @@ if loginReq.Username != expectedUsername ||
 如果凭据验证通过，服务器生成 JWT Token：
 
 ```go
-token, err := GenerateToken(loginReq.Username, loginReq.Password)
+token, err := GenerateToken(loginReq.Username)
 ```
 
 **Token 包含的信息**：
 - `username`: 用户名
-- `password_verifier`: 密码验证器（HMAC-SHA256(secret, password)）
 - `exp`: 过期时间（24小时后）
 - `iat`: 签发时间
 - `nbf`: 生效时间
@@ -260,10 +259,6 @@ token, err := GenerateToken(loginReq.Username, loginReq.Password)
 - 签名算法: `HS256`
 - 有效期: `24 小时`
 - 密钥: 通过 `KUBESPARK_JWT_SECRET` 环境变量配置，默认值为 `kubespark-secret-key-change-in-production`（生产环境必须修改）
-
-**安全特性**：
-- **密码验证器机制**: Token 中包含密码验证器（HMAC-SHA256），即使攻击者获得了 JWT Secret 和用户名，也无法生成有效 Token，因为需要知道实际密码
-- **防止离线暴力破解**: 使用 HMAC 而非普通哈希，攻击者即使看到 Token 中的验证器，也无法离线破解密码，因为需要 JWT Secret 来验证任何密码猜测
 
 #### 步骤 6: 返回 Token
 
@@ -301,7 +296,6 @@ header.payload.signature
 ```json
 {
   "username": "admin",
-  "password_verifier": "a1b2c3d4e5f6...",
   "exp": 1234567890,
   "iat": 1234567890,
   "nbf": 1234567890,
@@ -309,12 +303,6 @@ header.payload.signature
   "sub": "admin"
 }
 ```
-
-**password_verifier 说明**：
-- 使用 HMAC-SHA256 算法计算：`HMAC-SHA256(JWT_SECRET, password)`
-- 以十六进制字符串形式存储在 Token 中
-- 用于防止攻击者在获得 JWT Secret 和用户名后生成有效 Token
-- 即使攻击者看到验证器，也无法离线破解密码，因为需要 JWT Secret 来验证密码猜测
 
 **Signature**:
 ```
@@ -326,19 +314,12 @@ HMACSHA256(
 
 ### Token 验证
 
-Token 验证采用**三层验证机制**，确保最高级别的安全性：
+Token 验证采用标准的 JWT 验证机制：
 
 1. **签名验证**：验证 Token 的 HMAC-SHA256 签名，确保 Token 未被篡改
 2. **过期时间验证**：检查 `exp` 声明，确保 Token 未过期
 3. **生效时间验证**：检查 `nbf` 声明，确保 Token 已生效
 4. **签名方法验证**：确保使用正确的签名算法（HS256）
-5. **用户名验证**：验证 Token 中的用户名与配置的用户名匹配
-6. **密码验证器验证**：验证 Token 中的密码验证器与配置密码的验证器匹配
-
-**安全优势**：
-- **防止 Token 伪造**：即使攻击者获得了 JWT Secret 和用户名，也无法生成有效 Token，因为需要知道实际密码来计算正确的密码验证器
-- **防止离线暴力破解**：密码验证器使用 HMAC-SHA256，攻击者即使看到 Token 中的验证器，也无法离线破解密码，因为需要 JWT Secret 来验证任何密码猜测
-- **防止 Token 重用**：如果密码被更改，旧的 Token 将立即失效，因为密码验证器不匹配
 
 ## 使用 Token 访问 API
 
@@ -381,8 +362,6 @@ Authorization: Bearer <token>
 │   - 解析 Token                   │
 │   - 验证签名（HMAC-SHA256）      │
 │   - 检查过期时间                 │
-│   - 验证用户名匹配               │
-│   - 验证密码验证器匹配           │
 └──────┬──────────────────────────┘
        │ 3. 提取用户名
        ▼
@@ -687,24 +666,13 @@ KubeSpark 实现了多层安全防护机制，确保系统的安全性：
 - 确保 Token 的完整性和真实性
 - 防止 Token 被篡改或伪造
 
-#### 2. 密码验证器机制
-- Token 中包含密码验证器：`HMAC-SHA256(JWT_SECRET, password)`
-- **防止 Token 伪造**：即使攻击者获得了 JWT Secret 和用户名，也无法生成有效 Token
-- **防止离线暴力破解**：攻击者即使看到 Token 中的验证器，也无法离线破解密码，因为需要 JWT Secret 来验证密码猜测
-
-#### 3. 三层验证机制
-Token 验证时执行三层检查：
-1. **签名和过期验证**：标准 JWT 验证
-2. **用户名验证**：确保 Token 中的用户名与配置匹配
-3. **密码验证器验证**：确保 Token 中的密码验证器与配置密码匹配
-
-#### 4. 统一错误信息
-- 登录失败时返回统一的错误信息："Invalid username or password"
-- 防止通过错误信息泄露用户名是否存在等敏感信息
-
-#### 5. Token 过期机制
+#### 2. Token 过期机制
 - Token 有效期为 24 小时
 - 过期后需要重新登录获取新 Token
+
+#### 3. 统一错误信息
+- 登录失败时返回统一的错误信息："Invalid username or password"
+- 防止通过错误信息泄露用户名是否存在等敏感信息
 
 ### 安全建议
 
@@ -794,30 +762,20 @@ spec:
 
 ## 总结
 
-KubeSpark 的认证系统采用 JWT Token 机制，实现了多层安全防护：
+KubeSpark 的认证系统采用标准的 JWT Token 机制：
 
 ### 认证流程
 
 1. **登录**: 客户端使用用户名和密码登录，获取 JWT Token
 2. **认证**: 后续请求在 `Authorization` 头中携带 Token
-3. **验证**: 服务器执行三层验证（签名、用户名、密码验证器）
+3. **验证**: 服务器验证 Token 签名和过期时间
 4. **授权**: 验证通过后，请求继续处理
 
 ### 安全特性总结
 
 ✅ **JWT 签名验证** - 使用 HMAC-SHA256 确保 Token 完整性  
-✅ **密码验证器机制** - 防止 Token 伪造和离线暴力破解  
-✅ **三层验证机制** - 签名、用户名、密码验证器三重检查  
-✅ **统一错误信息** - 防止信息泄露  
 ✅ **Token 过期机制** - 24 小时有效期，自动失效  
+✅ **统一错误信息** - 防止信息泄露  
 ✅ **环境变量配置** - 灵活的凭据管理  
 
-### 安全优势
-
-- **防止 Token 伪造**：即使攻击者获得 JWT Secret 和用户名，也无法生成有效 Token
-- **防止离线暴力破解**：密码验证器使用 HMAC，需要 JWT Secret 才能验证密码猜测
-- **防止 Token 重用**：密码更改后，旧 Token 立即失效
-- **防止信息泄露**：统一的错误信息，不泄露用户名是否存在等信息
-
 通过环境变量可以灵活配置登录凭据，同时保持代码的简洁性。在生产环境中，请务必遵循安全建议，确保系统的安全性。
-
